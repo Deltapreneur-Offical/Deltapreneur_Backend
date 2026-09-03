@@ -106,7 +106,8 @@ def _migration_database_url() -> str:
     return _to_sync_url(raw)
 
 
-config.set_main_option("sqlalchemy.url", _migration_database_url())
+# ConfigParser treats % as interpolation; passwords often contain %40 etc.
+config.set_main_option("sqlalchemy.url", _migration_database_url().replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
