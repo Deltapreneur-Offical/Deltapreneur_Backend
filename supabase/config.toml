@@ -1,0 +1,11 @@
+# Linked to Deltapreneur-Offical's Project only.
+# project-ref: ohtboooxiqfrbumlidzz
+# URL: https://ohtboooxiqfrbumlidzz.supabase.co
+#
+# CLI (install once): npm i -g supabase
+#   supabase login
+#   supabase link --project-ref ohtboooxiqfrbumlidzz
+#
+# Never link this folder to a CoBrother/HubRegistrar Supabase project.
+
+project_id = "ohtboooxiqfrbumlidzz"

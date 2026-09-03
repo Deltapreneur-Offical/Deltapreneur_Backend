@@ -1,0 +1,69 @@
+CoBrother Backend - Pre-Production Checklist
+Last updated: 2026-05-28
+
+[SECURITY / PURCHASE RULES]
+[ ] Re-enable domain verification before purchase
+    - Env: REQUIRE_DOMAIN_VERIFICATION_BEFORE_PURCHASE=true
+    - Current dev value (run_dev.sh): false
+    - Current dev value (run_dev.ps1): false
+[ ] Re-enable frontend verification gating for buy UI (if disabled for local testing)
+    - Frontend flag: VITE_REQUIRE_DOMAIN_VERIFICATION_BEFORE_PURCHASE=true
+    - Current .env.local value: false
+
+[DOMAIN VERIFICATION]
+[ ] Keep verification methods enabled and tested:
+    - DNS
+    - META_TAG / file
+    - WHOIS_EMAIL
+[ ] Ensure DOMAIN_VERIFICATION_WHOIS_EMAIL_OVERRIDE is empty in production
+
+[URL / ENV SWITCHES]
+[ ] FRONTEND_BASE_URL set to production frontend URL
+[ ] BACKEND_BASE_URL set to production backend URL
+[ ] Google OAuth redirect URLs set to production callback URLs
+[ ] CORS_ALLOW_ORIGINS contains only production domains
+
+[DOMAIN LISTING / MEDIA]
+[ ] Confirm domain listing logo upload endpoint works in production
+[ ] Remove/avoid dev fallback behavior for logo upload failures (if temporary)
+
+[AUTH / COOKIE]
+[ ] AUTH_COOKIE_DOMAIN set correctly for production domain
+[ ] AUTH_COOKIE_SAMESITE/secure cookie behavior verified in production browser
+
+[PAYMENTS]
+[ ] Razorpay production keys configured:
+    - RAZORPAY_KEY_ID
+    - RAZORPAY_KEY_SECRET
+    - RAZORPAY_WEBHOOK_SECRET
+[ ] Test create-order, verify, failure flow on production-like env
+[ ] Verify participation-fee flow for all auction types (domain/venture/software/community)
+[ ] Set production participation fees in admin panel:
+    - Domain auction participation fee
+    - Venture auction participation fee
+    - Software auction participation fee
+    - Community auction participation fee
+
+[MAIL / VERIFICATION EMAIL]
+[ ] MAIL_* settings point to production SMTP
+[ ] WHOIS verification email flow tested with real domain owner mailbox
+[ ] Feedback email destination verified
+
+[VENTURE GSTIN — LIVE VERIFICATION]
+[ ] Render env: GSTIN_API_KEY=<key from https://gstincheck.co.in/>
+[ ] Render env: GSTIN_API_SANDBOX=false
+[ ] Render env: ENVIRONMENT=production
+[ ] Backend startup log shows "GSTIN live verification enabled"
+[ ] Test venture GST verify with a real active GSTIN (brand name must match trade name on GST)
+[ ] Confirm sandbox cannot verify in prod (invalid/fake GSTIN must fail)
+
+[FINAL QA]
+[ ] Smoke test: domain listing, verification, purchase, dashboard counts
+[ ] Smoke test: forgot/reset/change/set password flows
+[ ] Smoke test: OAuth + email login both work
+[ ] No localhost/127.0.0.1 URLs left in production config
+
+Release decision:
+[ ] READY FOR PRODUCTION
+Notes:
+- 

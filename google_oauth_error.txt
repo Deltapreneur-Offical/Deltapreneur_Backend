@@ -1,0 +1,11 @@
+Google OAuth Error: Google token exchange failed (401): The provided client secret is invalid.
+Google OAuth Error: Google token exchange failed (401): The provided client secret is invalid.
+Unhandled Exception: ProgrammingError: (psycopg2.errors.UndefinedColumn) column community.about does not exist
+LINE 1: ..., community.why_im_here AS community_why_im_here, community....
+                                                             ^
+
+[SQL: SELECT community.app_user_id AS community_app_user_id, community.linked_in_id AS community_linked_in_id, community.name AS community_name, community.image_url AS community_image_url, community.cover_image_url AS community_cover_image_url, community.linked_in_profile_url AS community_linked_in_profile_url, community.role AS community_role, community.views AS community_views, community.skills AS community_skills, community.industry AS community_industry, community.location AS community_location, community.why_im_here AS community_why_im_here, community.about AS community_about, community.expected_rate AS community_expected_rate, community.introduction_video_link AS community_introduction_video_link, community.resume_drive_link AS community_resume_drive_link, community.portfolio_website_link AS community_portfolio_website_link, community.preferred_work_type AS community_preferred_work_type, community.industry_expertise AS community_industry_expertise, community.languages_known AS community_languages_known, community.is_approved AS community_is_approved, community.featured AS community_featured, community.id AS community_id, community.created_at AS community_created_at, community.updated_at AS community_updated_at, community.is_deleted AS community_is_deleted, community.deleted_at AS community_deleted_at, community.deleted_by AS community_deleted_by 
+FROM community 
+WHERE community.app_user_id IN (%(primary_keys_1)s::UUID)]
+[parameters: {'primary_keys_1': UUID('46e58d56-99f1-4f0f-a096-6d99bca8f8a8')}]
+(Background on this error at: https://sqlalche.me/e/20/f405)

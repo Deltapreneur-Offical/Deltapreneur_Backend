@@ -1,0 +1,13 @@
+from enum import Enum
+
+
+class CommunityRole(str, Enum):
+    STUDENT = "STUDENT"
+    FREELANCER = "FREELANCER"
+    JOB_SEEKER = "JOB_SEEKER"
+    EMPLOYEE = "EMPLOYEE"
+    EMPLOYER = "EMPLOYER"
+    MENTOR = "MENTOR"
+    INVESTOR = "INVESTOR"
+    FOUNDER_CO_FOUNDER = "FOUNDER_CO_FOUNDER"
+    INCUBATORS = "INCUBATORS"

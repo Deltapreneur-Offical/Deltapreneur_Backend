@@ -1,0 +1,61 @@
+Aultum_Projects/
+
+# Secrets — never commit (copy .env.example to .env locally)
+**/.env
+.env
+.env.*
+!.env.example
+.env.local
+.env.*.local
+.env.backup*
+env (1).example
+*.pem
+*.key
+id_rsa*
+credentials.json
+*.dump
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+logs/
+*.log
+*.out
+*.err
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build / packaging
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+
+# Ruff / linting cache
+.ruff_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+.cursor/
+
+# Local docs — keep on disk, do not push
+docs/
+
+# Supabase CLI local cache
+supabase/.temp/
+

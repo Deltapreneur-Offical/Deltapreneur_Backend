@@ -1,0 +1,36 @@
+{
+  "registration": {
+    "default": 0.1,
+    "by_tld": {}
+  },
+  "premium_registration": {
+    "default": 0.1,
+    "by_tld": {}
+  },
+  "renewal": {
+    "default": 0.03,
+    "by_tld": {}
+  },
+  "transfer": {
+    "default": 0.03,
+    "by_tld": {}
+  },
+  "email": {
+    "default": 0.03
+  },
+  "ssl": {
+    "default": 0.03
+  },
+  "dnssec": {
+    "default": 0.03
+  },
+  "restore": {
+    "default": 0.03
+  },
+  "easydmarc": {
+    "default": 0
+  },
+  "spamexperts": {
+    "default": 0.03
+  }
+}

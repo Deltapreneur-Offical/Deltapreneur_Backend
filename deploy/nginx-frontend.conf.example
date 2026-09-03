@@ -1,0 +1,27 @@
+# Nginx static SPA for cobrother.com (frontend only — API on backend.cobrother.com)
+#
+# EC2 install:
+#   sudo cp deploy/nginx-frontend.conf.example /etc/nginx/sites-available/cobrother-frontend
+#   sudo ln -sf /etc/nginx/sites-available/cobrother-frontend /etc/nginx/sites-enabled/
+#   sudo nginx -t && sudo systemctl reload nginx
+#
+# Build the SPA with:
+#   VITE_API_URL=https://backend.cobrother.com
+#   VITE_APP_URL=https://cobrother.com
+#
+# Backend .env must use production OAuth URLs (see env.ec2.production.example).
+# Cloudflare: enable Network → WebSockets if you later proxy realtime through this host.
+
+server {
+    listen 80;
+    server_name cobrother.com www.cobrother.com;
+
+    root /opt/cobrother/frontend/dist;
+    index index.html;
+
+    client_max_body_size 25m;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

@@ -1,0 +1,1 @@
+"""Share / referral entities."""

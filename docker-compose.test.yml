@@ -1,0 +1,32 @@
+# Disposable local Postgres for the DB-backed pytest suites
+# (app/tests/integration, app/tests/auction). These suites DROP the entire
+# schema on every run — this container is the ONLY database they may touch.
+#
+# Data is kept in tmpfs (RAM only): stopping the container erases everything,
+# which is exactly what we want for a test database.
+#
+# Start:            docker compose -f docker-compose.test.yml up -d
+# Stop & wipe:      docker compose -f docker-compose.test.yml down
+#
+# Matching TEST_DATABASE_URL (already set in .env):
+#   postgresql://cobrother_test:cobrother_test@127.0.0.1:55432/cobrother_test
+#
+# Port 55432 is deliberate: 5432 may host a real local Postgres and 5433 is
+# the SSH tunnel to the shared RDS instance (real data — never test there).
+services:
+  test-db:
+    image: postgres:16-alpine
+    container_name: cobrother-test-db
+    environment:
+      POSTGRES_USER: cobrother_test
+      POSTGRES_PASSWORD: cobrother_test
+      POSTGRES_DB: cobrother_test
+    ports:
+      - "127.0.0.1:55432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cobrother_test -d cobrother_test"]
+      interval: 2s
+      timeout: 2s
+      retries: 15

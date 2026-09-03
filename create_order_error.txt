@@ -1,0 +1,20 @@
+Exception: AttributeError: 'TechnologyPricingPlan' object has no attribute 'seller_price'
+Traceback (most recent call last):
+  File "D:\Cobrother\cobrother_backend\app\controller\cocreation\cocreation_controller.py", line 213, in create_software_purchase_order
+    return await service.create_purchase_order(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Cobrother\cobrother_backend\app\service\cocreation\cocreation_payment_service.py", line 114, in create_purchase_order
+    seller_price = plan.seller_price
+                   ^^^^^^^^^^^^^^^^^
+AttributeError: 'TechnologyPricingPlan' object has no attribute 'seller_price'
+
+Exception: AttributeError: 'TechnologyPricingPlan' object has no attribute 'seller_price'
+Traceback (most recent call last):
+  File "D:\Cobrother\cobrother_backend\app\controller\cocreation\cocreation_controller.py", line 213, in create_software_purchase_order
+    return await service.create_purchase_order(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Cobrother\cobrother_backend\app\service\cocreation\cocreation_payment_service.py", line 114, in create_purchase_order
+    seller_price = plan.seller_price
+                   ^^^^^^^^^^^^^^^^^
+AttributeError: 'TechnologyPricingPlan' object has no attribute 'seller_price'
+

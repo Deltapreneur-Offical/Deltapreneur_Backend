@@ -1,0 +1,76 @@
+# LEGACY — pre-cutover unified demo host (demo.cobrother.com SPA + /api proxy).
+# Production uses split architecture:
+#   deploy/nginx-frontend.conf.example  → cobrother.com (SPA only)
+#   deploy/nginx-backend.conf.example   → backend.cobrother.com (API)
+#
+# Do NOT use this config for new deployments. Kept for historical reference only.
+#
+# EC2 install (historical reference only):
+#   sudo cp deploy/nginx-demo-unified.conf.example /etc/nginx/sites-available/cobrother
+#   sudo ln -sf /etc/nginx/sites-available/cobrother /etc/nginx/sites-enabled/cobrother
+#   sudo nginx -t && sudo systemctl reload nginx
+#
+# Cloudflare: enable Network → WebSockets for cobrother.com zone.
+
+upstream cobrother_api {
+    server 127.0.0.1:8000;
+    keepalive 32;
+}
+
+server {
+    listen 80;
+    server_name demo.cobrother.com;
+
+    root /opt/cobrother/frontend/dist;
+    index index.html;
+
+    client_max_body_size 25m;
+
+    location /api/ {
+        proxy_pass http://cobrother_api;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_read_timeout 300s;
+        proxy_connect_timeout 30s;
+        proxy_send_timeout 300s;
+    }
+
+    location /oauth2/ {
+        proxy_pass http://cobrother_api;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /login/oauth2/ {
+        proxy_pass http://cobrother_api;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /ws/ {
+        proxy_pass http://cobrother_api;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
