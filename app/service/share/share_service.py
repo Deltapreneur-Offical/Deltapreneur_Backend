@@ -80,10 +80,8 @@ def frontend_share_base_for_request(request: Request | None = None) -> str:
             return origin.rstrip("/")
 
     brand = brand_for_hostname(request_hostname(request))
-    if brand == "hubregistrar":
-        return "https://hubregistrar.com"
-    if brand == "cobrother":
-        return "https://cobrother.com"
+    if brand == "deltapreneur":
+        return "https://deltapreneur.com"
 
     base = (settings.FRONTEND_BASE_URL or "").rstrip("/")
     return base or "http://127.0.0.1:5173"

@@ -189,38 +189,42 @@ async def test_create_share_anonymous_no_referrer():
     session.commit.assert_awaited_once()
 
 
-def test_share_url_uses_hubregistrar_origin():
+def test_share_url_uses_deltapreneur_origin():
     session = AsyncMock()
     service = ShareService(session)
-    request = _request_with_headers(origin="https://hubregistrar.com")
+    request = _request_with_headers(origin="https://deltapreneur.com")
 
-    assert service.share_url(_share(token="hubToken123"), request) == "https://hubregistrar.com/s/hubToken123"
+    assert service.share_url(_share(token="deltaToken123"), request) == "https://deltapreneur.com/s/deltaToken123"
 
 
-def test_share_url_uses_hubregistrar_host_when_origin_missing():
+def test_share_url_uses_deltapreneur_host_when_origin_missing():
     session = AsyncMock()
     service = ShareService(session)
-    request = _request_with_headers(host="backend.hubregistrar.com")
+    request = _request_with_headers(host="api.deltapreneur.com")
 
-    assert service.share_url(_share(token="hubToken123"), request) == "https://hubregistrar.com/s/hubToken123"
+    assert service.share_url(_share(token="deltaToken123"), request) == "https://deltapreneur.com/s/deltaToken123"
 
 
-def test_share_url_preserves_cobrother_origin():
+def test_share_url_rejects_cobrother_origin(monkeypatch):
+    monkeypatch.setattr(
+        "app.service.share.share_service.settings.FRONTEND_BASE_URL",
+        "https://deltapreneur.com",
+    )
     session = AsyncMock()
     service = ShareService(session)
     request = _request_with_headers(origin="https://cobrother.com")
 
-    assert service.share_url(_share(token="coToken123"), request) == "https://cobrother.com/s/coToken123"
+    assert service.share_url(_share(token="coToken123"), request) == "https://deltapreneur.com/s/coToken123"
 
 
 def test_share_base_ignores_untrusted_origin(monkeypatch):
     monkeypatch.setattr(
         "app.service.share.share_service.settings.FRONTEND_BASE_URL",
-        "https://cobrother.com",
+        "https://deltapreneur.com",
     )
     request = _request_with_headers(origin="https://evil.example")
 
-    assert frontend_share_base_for_request(request) == "https://cobrother.com"
+    assert frontend_share_base_for_request(request) == "https://deltapreneur.com"
 
 
 # ── sanitized preview ─────────────────────────────────────────────────────────

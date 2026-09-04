@@ -1,5 +1,5 @@
-# Push to main → run tests first → deploy only if tests pass.
-name: Deploy Backend
+# Push to main → quality gate only. Production API is Render, not CoBrother EC2.
+name: Backend quality gate
 
 on:
   pull_request:
@@ -77,63 +77,3 @@ jobs:
       - name: Run backend test suite
         run: |
           pytest app/tests -q
-
-  deploy:
-    needs: quality-gate
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Diagnostic - SSH Connectivity Check
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-        run: |
-          echo "Checking EC2_HOST..."
-          # If it's a domain, see what it resolves to (could be Cloudflare)
-          host $EC2_HOST || echo "Host command failed"
-          echo "Attempting to connect to port 22 on $EC2_HOST..."
-          nc -v -z -w 5 $EC2_HOST 22 || {
-            echo "::error::SSH port 22 is unreachable on $EC2_HOST. If this resolves to a Cloudflare IP, you must change EC2_HOST secret to the true EC2 Public IPv4 address."
-            exit 1
-          }
-
-      - name: Deploy to EC2
-        uses: appleboy/ssh-action@v1.2.0
-        env:
-          TURNSTILE_SITE_KEY: ${{ secrets.TURNSTILE_SITE_KEY }}
-          TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          port: ${{ secrets.EC2_SSH_PORT || 22 }}
-          timeout: 120s
-          command_timeout: 30m
-          envs: TURNSTILE_SITE_KEY,TURNSTILE_SECRET_KEY
-          script: |
-            cd /home/ubuntu/CoBrother_Backend
-
-            git fetch origin
-            git reset --hard origin/main
-
-            source /opt/cobrother/backend/venv/bin/activate
-
-            pip install -r requirements.txt
-
-            python scripts/check_alembic_graph.py
-            python scripts/repair_alembic_database.py
-
-            bash scripts/patch_ec2_turnstile.sh /home/ubuntu/CoBrother_Backend/.env || true
-
-            sudo systemctl restart cobrother.service
-
-            sleep 5
-
-            sudo systemctl is-active --quiet cobrother.service
-
-            bash scripts/verify_production_cors.sh || {
-              echo "WARN: CORS smoke test failed — check server .env:"
-              echo "  BACKEND_BASE_URL=https://backend.cobrother.com"
-              echo "  FRONTEND_BASE_URL=https://cobrother.com"
-              echo "  CORS_ALLOW_ORIGINS includes https://cobrother.com"
-            }

@@ -1,5 +1,5 @@
-# CoBrother FastAPI backend — used locally (docker compose) and on AWS (ECR/ECS).
-FROM python:3.12-slim-bookworm
+# Deltapreneur FastAPI backend. Render uses native Python 3.11.9 + $PORT, not this image.
+FROM python:3.11.9-slim-bookworm
 
 WORKDIR /app
 

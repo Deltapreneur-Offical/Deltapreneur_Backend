@@ -72,7 +72,7 @@ def _host_request(host: str) -> Request:
     )
 
 
-def test_session_cookies_use_cobrother_domain_on_cobrother_host() -> None:
+def test_session_cookies_use_deltapreneur_domain_on_api_host() -> None:
     from starlette.responses import Response
 
     response = Response()
@@ -80,26 +80,10 @@ def test_session_cookies_use_cobrother_domain_on_cobrother_host() -> None:
         response,
         access_token="access",
         refresh_token="refresh",
-        request=_host_request("backend.cobrother.com"),
+        request=_host_request("api.deltapreneur.com"),
     )
     cookies = response.headers.getlist("set-cookie")
     assert cookies
-    assert any("domain=.cobrother.com" in item.lower() for item in cookies)
-    assert all("samesite=lax" in item.lower() for item in cookies)
-
-
-def test_session_cookies_use_hubregistrar_domain_on_hub_host() -> None:
-    from starlette.responses import Response
-
-    response = Response()
-    attach_session_cookies(
-        response,
-        access_token="access",
-        refresh_token="refresh",
-        request=_host_request("backend.hubregistrar.com"),
-    )
-    cookies = response.headers.getlist("set-cookie")
-    assert cookies
-    assert any("domain=.hubregistrar.com" in item.lower() for item in cookies)
+    assert any("domain=.deltapreneur.com" in item.lower() for item in cookies)
     assert all("samesite=lax" in item.lower() for item in cookies)
     assert all("domain=.cobrother.com" not in item.lower() for item in cookies)

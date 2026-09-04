@@ -2,7 +2,7 @@ services:
   - type: web
     name: deltapreneur-backend
     runtime: python
-    plan: starter   # free tier spins down; auctions/WS need a plan that stays up
+    plan: starter
     buildCommand: pip install -r requirements.txt
     preDeployCommand: alembic upgrade head
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
@@ -12,5 +12,3 @@ services:
         value: "3.11.9"
       - key: ENVIRONMENT
         value: production
-      # Secrets (DATABASE_URL, JWT, MAIL_*, Google, storage) live in the
-      # Render dashboard only. Do not add a Render Postgres — use existing Supabase.

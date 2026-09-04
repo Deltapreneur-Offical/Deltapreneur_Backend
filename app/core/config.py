@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     MAIL_FROM_NAME: str
 
     # Display From for transactional mail (e.g. no-reply@hubregistrar.com). Replies go to MAIL_REPLY_TO.
-    MAIL_REPLY_TO: str = "support@hubregistrar.com"
+    MAIL_REPLY_TO: str = "support@deltapreneur.com"
 
     # Optional From for domain registration lifecycle emails (active / DNS / RAA).
     # Empty = use MAIL_FROM. Example: domains@hubregistrar.com (requires SMTP send-as / Workspace).
@@ -586,7 +586,7 @@ class Settings(BaseSettings):
         return bool(self.TURNSTILE_SECRET_KEY.strip())
 
     def resolved_mail_reply_to(self) -> str:
-        return (self.MAIL_REPLY_TO or "support@hubregistrar.com").strip()
+        return (self.MAIL_REPLY_TO or "support@deltapreneur.com").strip()
 
     def resolved_mail_domains_from(self) -> str:
         """From address for domain registration lifecycle emails."""
@@ -677,12 +677,10 @@ class Settings(BaseSettings):
         return cleaned.rstrip("/")
 
     _BRAND_SPA_ORIGINS = (
-        "https://cobrother.com",
-        "https://www.cobrother.com",
-        "https://hubregistrar.com",
-        "https://www.hubregistrar.com",
+        "https://deltapreneur.com",
+        "https://www.deltapreneur.com",
     )
-    _BRAND_SPA_ORIGIN_REGEX = r"^https://([a-z0-9-]+\.)*(cobrother|hubregistrar)\.com$"
+    _BRAND_SPA_ORIGIN_REGEX = r"^https://([a-z0-9-]+\.)*deltapreneur\.com$"
 
     def _is_production_env(self) -> bool:
         return (self.ENVIRONMENT or "").strip().lower() == "production"
@@ -715,16 +713,15 @@ class Settings(BaseSettings):
             ):
                 if origin not in origins:
                     origins.append(origin)
-        # Always include live brand SPAs. A stale CORS_ALLOW_ORIGINS or a
-        # non-canonical ENVIRONMENT (e.g. "Production") must not block
-        # HubRegistrar checkout verify while CoBrother remains allowed.
+        # Always include this product's SPA. Do not inject cobrother/hubregistrar
+        # origins — those sites must not call the isolated Deltapreneur API.
         for origin in self._BRAND_SPA_ORIGINS:
             if origin not in origins:
                 origins.append(origin)
         return origins
 
     def resolved_cors_origin_regex(self) -> str | None:
-        """Allow https://*.cobrother.com and https://*.hubregistrar.com SPA origins."""
+        """Allow https://*.deltapreneur.com SPA origins."""
         raw = (self.CORS_ALLOW_ORIGIN_REGEX or "").strip()
         if raw:
             return raw

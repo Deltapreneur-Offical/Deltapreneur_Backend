@@ -78,39 +78,41 @@ def test_spring_compat_linkedin_login_redirects(auth_client) -> None:
     assert "linkedin.com/oauth/v2/authorization" in response.headers["location"]
 
 
-def test_linkedin_login_uses_cobrother_callback_on_cobrother_host(auth_client) -> None:
+def test_linkedin_login_uses_configured_callback_on_deltapreneur_host(auth_client) -> None:
     client, _ = auth_client
-    cobrother_uri = "https://backend.cobrother.com/api/v1/community/linkedin/callback"
+    delta_uri = "https://api.deltapreneur.com/api/v1/community/linkedin/callback"
     with patch("app.controller.auth.auth_controller.settings") as mock_settings, patch(
         "app.core.frontend_origins.settings"
     ) as origin_settings:
         mock_settings.LINKEDIN_CLIENT_ID = "linkedin-client-id"
         mock_settings.LINKEDIN_CLIENT_SECRET = "linkedin-client-secret"
-        origin_settings.LINKEDIN_REDIRECT_URI = cobrother_uri
-        origin_settings.LINKEDIN_REDIRECT_URI_HUBREGISTRAR = ""
-        origin_settings.BACKEND_BASE_URL = "https://backend.cobrother.com"
+        origin_settings.LINKEDIN_REDIRECT_URI = delta_uri
+        origin_settings.LINKEDIN_REDIRECT_URI_HUBREGISTRAR = (
+            "https://backend.hubregistrar.com/api/v1/community/linkedin/callback"
+        )
+        origin_settings.BACKEND_BASE_URL = "https://api.deltapreneur.com"
         response = client.get(
             "/oauth2/authorization/linkedin",
-            headers={"host": "backend.cobrother.com"},
+            headers={"host": "api.deltapreneur.com"},
             follow_redirects=False,
         )
     assert response.status_code == 302
     redirect_uri = parse_qs(urlparse(response.headers["location"]).query)["redirect_uri"][0]
-    assert redirect_uri == cobrother_uri
+    assert redirect_uri == delta_uri
 
 
-def test_linkedin_login_uses_hubregistrar_callback_on_hub_host(auth_client) -> None:
+def test_linkedin_login_does_not_switch_to_hub_leftover_on_hub_host(auth_client) -> None:
     client, _ = auth_client
-    cobrother_uri = "https://backend.cobrother.com/api/v1/community/linkedin/callback"
+    delta_uri = "https://api.deltapreneur.com/api/v1/community/linkedin/callback"
     hub_uri = "https://backend.hubregistrar.com/api/v1/community/linkedin/callback"
     with patch("app.controller.auth.auth_controller.settings") as mock_settings, patch(
         "app.core.frontend_origins.settings"
     ) as origin_settings:
         mock_settings.LINKEDIN_CLIENT_ID = "linkedin-client-id"
         mock_settings.LINKEDIN_CLIENT_SECRET = "linkedin-client-secret"
-        origin_settings.LINKEDIN_REDIRECT_URI = cobrother_uri
-        origin_settings.LINKEDIN_REDIRECT_URI_HUBREGISTRAR = ""
-        origin_settings.BACKEND_BASE_URL = "https://backend.cobrother.com"
+        origin_settings.LINKEDIN_REDIRECT_URI = delta_uri
+        origin_settings.LINKEDIN_REDIRECT_URI_HUBREGISTRAR = hub_uri
+        origin_settings.BACKEND_BASE_URL = "https://api.deltapreneur.com"
         response = client.get(
             "/oauth2/authorization/linkedin",
             headers={"host": "backend.hubregistrar.com"},
@@ -118,8 +120,8 @@ def test_linkedin_login_uses_hubregistrar_callback_on_hub_host(auth_client) -> N
         )
     assert response.status_code == 302
     redirect_uri = parse_qs(urlparse(response.headers["location"]).query)["redirect_uri"][0]
-    assert redirect_uri == hub_uri
-    assert redirect_uri != cobrother_uri
+    assert redirect_uri == delta_uri
+    assert redirect_uri != hub_uri
 
 
 def test_google_oauth_redirect_does_not_include_tokens_in_query(auth_client) -> None:
@@ -163,27 +165,27 @@ def _host_request(host: str):
     )
 
 
-def test_google_oauth_success_stays_on_cobrother_when_hub_origin_mismatches_host() -> None:
+def test_google_oauth_success_ignores_cobrother_origin_on_deltapreneur_host() -> None:
     response = auth_controller._google_oauth_frontend_redirect(
         success=True,
         session_data={"profileComplete": True},
         provider="google",
-        return_origin="https://hubregistrar.com",
-        request=_host_request("backend.cobrother.com"),
+        return_origin="https://cobrother.com",
+        request=_host_request("api.deltapreneur.com"),
     )
     location = response.headers["location"]
-    assert "hubregistrar.com/auth/callback" not in location
+    assert "cobrother.com/auth/callback" not in location
     assert "token=" not in location
 
 
-def test_google_oauth_success_returns_to_hubregistrar_when_host_matches() -> None:
+def test_google_oauth_success_returns_to_deltapreneur_when_host_matches() -> None:
     response = auth_controller._google_oauth_frontend_redirect(
         success=True,
         session_data={"profileComplete": True},
         provider="google",
-        return_origin="https://hubregistrar.com",
-        request=_host_request("backend.hubregistrar.com"),
+        return_origin="https://deltapreneur.com",
+        request=_host_request("api.deltapreneur.com"),
     )
     assert response.headers["location"].startswith(
-        "https://hubregistrar.com/auth/callback"
+        "https://deltapreneur.com/auth/callback"
     )

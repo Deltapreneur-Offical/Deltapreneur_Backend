@@ -1,7 +1,8 @@
 """Allow-listed SPA origins for OAuth return URLs and Host-based cookie domains.
 
-CoBrother production URLs stay the default. HubRegistrar is honored only when the
-API Host matches that brand, so an unset Hub Google callback cannot hijack login.
+This isolated Deltapreneur API only honors deltapreneur.com. CoBrother and
+HubRegistrar hosts are not CORS/return origins here, so those SPAs cannot call
+this API or steal OAuth success redirects.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from starlette.requests import Request
 from app.core.config import settings
 
 _SPA_ORIGIN_RE = re.compile(
-    r"^https://([a-z0-9-]+\.)*(cobrother|hubregistrar)\.com$",
+    r"^https://([a-z0-9-]+\.)*deltapreneur\.com$",
     re.IGNORECASE,
 )
 _DEV_ORIGINS = {
@@ -41,10 +42,8 @@ def brand_for_hostname(hostname: str | None) -> str | None:
     host = (hostname or "").split(":")[0].strip().lower()
     if not host:
         return None
-    if host == "hubregistrar.com" or host.endswith(".hubregistrar.com"):
-        return "hubregistrar"
-    if host == "cobrother.com" or host.endswith(".cobrother.com"):
-        return "cobrother"
+    if host == "deltapreneur.com" or host.endswith(".deltapreneur.com"):
+        return "deltapreneur"
     return None
 
 
@@ -64,10 +63,8 @@ def normalize_origin(value: str | None) -> str | None:
 
 def _explicit_allowed_origins() -> set[str]:
     allowed = {
-        "https://cobrother.com",
-        "https://www.cobrother.com",
-        "https://hubregistrar.com",
-        "https://www.hubregistrar.com",
+        "https://deltapreneur.com",
+        "https://www.deltapreneur.com",
         *_DEV_ORIGINS,
     }
     frontend = (settings.FRONTEND_BASE_URL or "").strip().rstrip("/")
@@ -86,7 +83,7 @@ def allowed_frontend_return_origin(return_origin: str | None) -> str | None:
     if not origin:
         return None
     host = (urlsplit(origin).hostname or "").lower()
-    if host.startswith("backend."):
+    if host.startswith("backend.") or host.startswith("api."):
         return None
     if origin in _explicit_allowed_origins():
         return origin
@@ -100,10 +97,10 @@ def gated_frontend_origin(
     return_origin: str | None,
     request: Request | None,
 ) -> str | None:
-    """Honor HubRegistrar return_origin only when the API Host is HubRegistrar.
+    """Honor Deltapreneur return_origin only when the API Host is Deltapreneur.
 
     Missing, invalid, or brand-mismatched origins return None so callers keep
-    FRONTEND_BASE_URL / GOOGLE_OAUTH_SUCCESS_REDIRECT (CoBrother today).
+    FRONTEND_BASE_URL / GOOGLE_OAUTH_SUCCESS_REDIRECT.
     """
     allowed = allowed_frontend_return_origin(return_origin)
     if not allowed:
@@ -120,21 +117,17 @@ def gated_frontend_origin(
 def cookie_domain_for_request(request: Request | None) -> str | None:
     host = request_hostname(request)
     brand = brand_for_hostname(host)
-    if brand == "hubregistrar":
-        return ".hubregistrar.com"
-    if brand == "cobrother":
-        return ".cobrother.com"
+    if brand == "deltapreneur":
+        return ".deltapreneur.com"
     configured = (settings.AUTH_COOKIE_DOMAIN or "").strip()
     return configured or None
 
 
 def google_oauth_redirect_uri_for_request(request: Request | None = None) -> str:
-    """CoBrother Google callback stays the default. Hub URI is additive only."""
-    host = request_hostname(request)
-    if brand_for_hostname(host) == "hubregistrar":
-        hub = (settings.GOOGLE_OAUTH_REDIRECT_URI_HUBREGISTRAR or "").strip()
-        if hub:
-            return hub
+    """Use GOOGLE_OAUTH_REDIRECT_URI. Do not invent a second Google client.
+
+    GOOGLE_OAUTH_REDIRECT_URI_HUBREGISTRAR is an unused leftover on this API.
+    """
     cobrother = (settings.GOOGLE_OAUTH_REDIRECT_URI or "").strip()
     if cobrother:
         return cobrother
@@ -142,19 +135,8 @@ def google_oauth_redirect_uri_for_request(request: Request | None = None) -> str
     return f"{base}/api/v1/auth/oauth/google/callback"
 
 
-_LINKEDIN_COMMUNITY_CALLBACK_PATH = "/api/v1/community/linkedin/callback"
-
-
 def linkedin_oauth_redirect_uri_for_request(request: Request | None = None) -> str:
-    """CoBrother LinkedIn callback stays the default. Hub URI is additive only."""
-    host = request_hostname(request)
-    if brand_for_hostname(host) == "hubregistrar":
-        hub = (settings.LINKEDIN_REDIRECT_URI_HUBREGISTRAR or "").strip()
-        if hub:
-            return hub
-        hostname = (host or "").split(":")[0].strip().lower()
-        if hostname:
-            return f"https://{hostname}{_LINKEDIN_COMMUNITY_CALLBACK_PATH}"
+    """Use LINKEDIN_REDIRECT_URI / BACKEND_BASE_URL. Hub leftover is unused."""
     cobrother = (settings.LINKEDIN_REDIRECT_URI or "").strip()
     if cobrother:
         return cobrother
