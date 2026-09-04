@@ -345,18 +345,18 @@ def test_linkedin_service_callback_updates_profile_success():
 def test_decode_linkedin_oauth_state_roundtrip_signed():
     from app.service.community.community_service import CommunityService
 
-    redirect = "https://backend.cobrother.com/api/v1/community/linkedin/callback"
+    redirect = "https://api.deltapreneur.com/api/v1/community/linkedin/callback"
     state = CommunityService._encode_linkedin_oauth_state(
         email="user@example.com",
         redirect_uri=redirect,
-        return_origin="https://cobrother.com",
+        return_origin="https://deltapreneur.com",
     )
     decoded = CommunityService._decode_linkedin_oauth_state(state)
     assert decoded == "user@example.com"
 
     email, return_origin, redirect_uri = CommunityService._parse_linkedin_oauth_state_payload(state)
     assert email == "user@example.com"
-    assert return_origin == "https://cobrother.com"
+    assert return_origin == "https://deltapreneur.com"
     assert redirect_uri == redirect
 
 
