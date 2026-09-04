@@ -1,16 +1,15 @@
 name: Alembic Graph Check
 
 on:
+  # No path filters: this is a required status check, so it must run on
+  # EVERY pull request to main (otherwise it stays "skipped" and blocks merge).
   pull_request:
-    paths:
-      - "alembic/**"
-      - "scripts/check_alembic_graph.py"
-      - "scripts/merge_alembic_heads.py"
+    branches:
+      - main
   push:
     branches:
       - main
-    paths:
-      - "alembic/**"
+  workflow_dispatch:
 
 jobs:
   alembic-graph:

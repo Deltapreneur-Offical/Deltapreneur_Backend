@@ -2,26 +2,15 @@
 name: Backend quality gate
 
 on:
+  # No path filters: this is a required status check, so it must run on
+  # EVERY pull request to main. With paths, a PR that misses those globs
+  # would leave the check "skipped" and block merge forever.
   pull_request:
-    paths:
-      - ".github/workflows/deploy.yml"
-      - "alembic/**"
-      - "app/**"
-      - "requirements.txt"
-      - "pytest.ini"
-      - "env.ci.example"
-      - "scripts/**"
+    branches:
+      - main
   push:
     branches:
       - main
-    paths:
-      - ".github/workflows/deploy.yml"
-      - "alembic/**"
-      - "app/**"
-      - "requirements.txt"
-      - "pytest.ini"
-      - "env.ci.example"
-      - "scripts/**"
   workflow_dispatch:
 
 jobs:
