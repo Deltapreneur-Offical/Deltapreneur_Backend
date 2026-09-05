@@ -144,7 +144,7 @@ class DomainTransferNotificationService:
                 tx.buyer,
                 NotificationType.DOMAIN_TRANSFER_ADMIN_REVIEW_REQUIRED,
                 "Transfer under review",
-                f"HubRegistrar is reviewing the transfer for {tx.domain_fqdn}.",
+                f"Deltapreneur is reviewing the transfer for {tx.domain_fqdn}.",
                 _transfer_url(tx.id, buyer=True),
             )
         tx.email_admin_review_sent = True
@@ -186,7 +186,7 @@ class DomainTransferNotificationService:
             tx.seller,
             NotificationType.SYSTEM,
             "Add payout details",
-            f"Please add your payout details so HubRegistrar can release payment for {tx.domain_fqdn}.",
+            f"Please add your payout details so Deltapreneur can release payment for {tx.domain_fqdn}.",
             payout_settings_url,
         )
         await self._events.log(

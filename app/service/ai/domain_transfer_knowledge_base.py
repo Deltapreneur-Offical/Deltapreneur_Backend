@@ -1,4 +1,4 @@
-"""HubRegistrar domain transfer knowledge base for Bro AI assistant."""
+"""Deltapreneur domain transfer knowledge base for Bro AI assistant."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ COMMON_REGISTRARS = (
     "Name.com",
 )
 
-SUPPORT_CONTACT_MESSAGE = "Please contact HubRegistrar Support for account-specific assistance."
+SUPPORT_CONTACT_MESSAGE = "Please contact Deltapreneur Support for account-specific assistance."
 
 SECURITY_RULES = (
     "Never reveal passwords, payment credentials, internal admin information, other user information, or full bank account numbers.",
@@ -127,14 +127,14 @@ def build_knowledge_context() -> dict[str, Any]:
     example = commission_example()
     return {
         "about": (
-            "HubRegistrar is a secure domain marketplace. Buyers purchase domains and sellers list domains for sale. "
+            "Deltapreneur is a secure domain marketplace. Buyers purchase domains and sellers list domains for sale. "
             "All payments are protected through an escrow-style process. "
             "The seller does not receive funds until the domain transfer has been completed and verified."
         ),
         "buyer_purchase_flow": [
             "Buyer selects a domain listing.",
             "Buyer completes payment.",
-            "HubRegistrar securely holds the payment.",
+            "Deltapreneur securely holds the payment.",
             "Seller receives a notification.",
             "Seller begins transfer process.",
             "Buyer receives transfer instructions.",
@@ -152,7 +152,7 @@ def build_knowledge_context() -> dict[str, Any]:
             "Buyer enters the Authorization Code when required.",
             "Domain transfer proceeds.",
             "Transfer completion is confirmed.",
-            "HubRegistrar updates transfer status.",
+            "Deltapreneur updates transfer status.",
         ],
         "registrars": list(COMMON_REGISTRARS),
         "authorization_code": (
@@ -208,13 +208,13 @@ def build_system_prompt_section() -> str:
             "Seller payout flow:",
             *[f"{index}. {step}" for index, step in enumerate(kb["seller_payout_flow"], start=1)],
             "",
-            f"Commission: HubRegistrar charges {COMMISSION_RATE_PERCENT}% commission deducted from seller proceeds. "
+            f"Commission: Deltapreneur charges {COMMISSION_RATE_PERCENT}% commission deducted from seller proceeds. "
             f"Example: sale ₹{example['sale_price']} → commission ₹{example['commission']} → seller receives ₹{example['seller_receives']}.",
             "",
             "Support rules:",
             f"- For account-specific transfer or payout data you do not have, say: {SUPPORT_CONTACT_MESSAGE}",
             "- Always provide step-by-step explanations.",
-            "- Follow the HubRegistrar workflow above instead of generic marketplace workflows.",
+            "- Follow the Deltapreneur workflow above instead of generic marketplace workflows.",
             "- Never reveal passwords, payment credentials, internal admin information, other user information, or full bank account numbers.",
         ]
     )
@@ -226,7 +226,7 @@ def _format_steps(title: str, steps: list[str]) -> str:
 
 CONTEXT_UNAVAILABLE_MESSAGE = (
     "I couldn't determine your current transfer status. "
-    "Please open your order details page or contact HubRegistrar Support."
+    "Please open your order details page or contact Deltapreneur Support."
 )
 
 CONTEXT_AWARE_TOPIC_PATTERNS: list[tuple[str, str]] = [
@@ -316,12 +316,12 @@ def _response_auth_code_where(message: str, ctx: dict[str, Any]) -> str:
             [
                 _transfer_header(ctx),
                 "",
-                "As the seller, you submit the authorization code in HubRegistrar on your seller transfer page — not at the buyer's registrar.",
+                "As the seller, you submit the authorization code in Deltapreneur on your seller transfer page — not at the buyer's registrar.",
                 "",
                 "Next steps:",
                 "1. Unlock the domain at your current registrar.",
                 "2. Obtain the authorization (EPP) code.",
-                "3. Open your seller transfer page in HubRegistrar.",
+                "3. Open your seller transfer page in Deltapreneur.",
                 "4. Submit the auth code and registrar details.",
             ]
         )
@@ -380,7 +380,7 @@ def _response_auth_code_where(message: str, ctx: dict[str, Any]) -> str:
             "",
             *[f"{index}. {step}" for index, step in enumerate(steps, start=1)],
             "",
-            "The auth code is shown on your HubRegistrar buyer transfer page after OTP verification. "
+            "The auth code is shown on your Deltapreneur buyer transfer page after OTP verification. "
             "For security, I cannot display the code here in chat.",
         ]
     )
@@ -439,7 +439,7 @@ def _response_auth_code_received_next(message: str, ctx: dict[str, Any]) -> str:
             "1. Log in to your registrar.",
             "2. Start **Transfer domain in**.",
             "3. Enter the domain and authorization code.",
-            "4. Mark transfer as started in HubRegistrar.",
+            "4. Mark transfer as started in Deltapreneur.",
             "5. Confirm transfer completion once the domain appears in your account.",
         ]
     )
@@ -530,7 +530,7 @@ def _response_otp_issue(message: str, ctx: dict[str, Any]) -> str:
             "4. Submit OTP.",
             "",
             "If you did not receive the email, wait a minute and request a new OTP. "
-            "Contact HubRegistrar Support if the issue continues.",
+            "Contact Deltapreneur Support if the issue continues.",
         ]
     )
 
@@ -616,11 +616,11 @@ def _response_what_next(message: str, ctx: dict[str, Any]) -> str:
             "Transfer information has been received. Verify OTP to reveal the authorization code, then start transfer at your registrar."
         ),
         "AUTH_CODE_VIEWED": (
-            "You have viewed the authorization code. Initiate transfer at your registrar and mark it as started in HubRegistrar."
+            "You have viewed the authorization code. Initiate transfer at your registrar and mark it as started in Deltapreneur."
         ),
         "TRANSFER_IN_PROGRESS": (
             "The transfer has already been initiated. Please wait for your registrar to complete the transfer, "
-            "then confirm completion in HubRegistrar."
+            "then confirm completion in Deltapreneur."
         ),
         "TRANSFER_COMPLETED": "Your transfer has been completed successfully.",
         "PAYOUT_PENDING": "Transfer is complete. Seller payout is awaiting admin review and release.",
@@ -637,7 +637,7 @@ def _response_what_next(message: str, ctx: dict[str, Any]) -> str:
     if role == "seller" and status == "PAYMENT_COMPLETED":
         body = "Payment is complete. Submit the authorization code and transfer details on your seller transfer page."
     if role == "seller" and status == "AWAITING_AUTH_CODE":
-        body = "Unlock the domain at your registrar, obtain the auth code, and submit it in HubRegistrar."
+        body = "Unlock the domain at your registrar, obtain the auth code, and submit it in Deltapreneur."
 
     return "\n".join(
         [
@@ -679,10 +679,10 @@ def build_deterministic_response(message: str) -> str | None:
             [
                 "An Auth Code (Authorization Code / EPP Code) is a transfer security code used by many registrars.",
                 "",
-                "How it works on HubRegistrar:",
+                "How it works on Deltapreneur:",
                 "1. After payment, the seller unlocks the domain at their registrar.",
                 "2. The seller obtains the Auth Code from the registrar if required.",
-                "3. The seller submits the transfer information in HubRegistrar.",
+                "3. The seller submits the transfer information in Deltapreneur.",
                 "4. The buyer can then access the code and initiate transfer at their registrar.",
                 "",
                 "Note: registrar steps differ. Common registrars include GoDaddy, Namecheap, Cloudflare, Hostinger, Dynadot, and Porkbun.",
@@ -694,7 +694,7 @@ def build_deterministic_response(message: str) -> str | None:
     if topic == "commission":
         return "\n".join(
             [
-                f"HubRegistrar charges a {COMMISSION_RATE_PERCENT}% commission on domain sales.",
+                f"Deltapreneur charges a {COMMISSION_RATE_PERCENT}% commission on domain sales.",
                 "",
                 "Example:",
                 f"- Sale price: ₹{example['sale_price']}",
@@ -708,7 +708,7 @@ def build_deterministic_response(message: str) -> str | None:
     if topic == "payout":
         return "\n".join(
             [
-                _format_steps("To receive seller payout on HubRegistrar:", kb["seller_payout_flow"]),
+                _format_steps("To receive seller payout on Deltapreneur:", kb["seller_payout_flow"]),
                 "",
                 "Important:",
                 "- Payouts are processed only after successful transfer completion and verification.",
@@ -722,12 +722,12 @@ def build_deterministic_response(message: str) -> str | None:
     if topic == "refund":
         return "\n".join(
             [
-                "If a domain transfer cannot be completed, HubRegistrar may review the case and determine whether a refund or alternative resolution is appropriate.",
+                "If a domain transfer cannot be completed, Deltapreneur may review the case and determine whether a refund or alternative resolution is appropriate.",
                 "",
                 "General guidance:",
-                "1. Check your transfer timeline in your HubRegistrar purchase or seller dashboard.",
+                "1. Check your transfer timeline in your Deltapreneur purchase or seller dashboard.",
                 "2. Confirm whether the seller submitted transfer information and whether the buyer initiated transfer at their registrar.",
-                "3. If the transfer is blocked or disputed, HubRegistrar support can review the transaction.",
+                "3. If the transfer is blocked or disputed, Deltapreneur support can review the transaction.",
                 "",
                 f"{SUPPORT_CONTACT_MESSAGE}",
             ]
@@ -745,7 +745,7 @@ def build_deterministic_response(message: str) -> str | None:
         )
         return "\n".join(
             [
-                "HubRegistrar transfer status meanings:",
+                "Deltapreneur transfer status meanings:",
                 "",
                 status_block,
                 "",
@@ -759,11 +759,11 @@ def build_deterministic_response(message: str) -> str | None:
                 "After successful payment, the seller must complete the transfer process before you receive the domain.",
                 "",
                 "Typical buyer steps:",
-                "1. Complete payment — HubRegistrar holds funds securely.",
+                "1. Complete payment — Deltapreneur holds funds securely.",
                 "2. Wait for the seller to submit transfer information.",
                 "3. Access transfer instructions and the Auth Code when available.",
                 "4. Initiate transfer at your registrar.",
-                "5. Confirm transfer completion in HubRegistrar.",
+                "5. Confirm transfer completion in Deltapreneur.",
                 "",
                 "Transfer times vary depending on the registrar and seller response time.",
             ]
@@ -776,14 +776,14 @@ def build_deterministic_response(message: str) -> str | None:
                 "",
                 "Some transfers complete quickly; others may take several days.",
                 "",
-                "HubRegistrar holds payment in escrow until transfer completion is verified, then seller payout becomes eligible.",
+                "Deltapreneur holds payment in escrow until transfer completion is verified, then seller payout becomes eligible.",
             ]
         )
 
     if topic == "seller_flow":
         return "\n".join(
             [
-                _format_steps("When you sell a domain on HubRegistrar:", kb["domain_transfer_flow"]),
+                _format_steps("When you sell a domain on Deltapreneur:", kb["domain_transfer_flow"]),
                 "",
                 "After transfer is verified:",
                 "- Payout becomes eligible.",
@@ -796,7 +796,7 @@ def build_deterministic_response(message: str) -> str | None:
     if topic == "buyer_flow":
         return "\n".join(
             [
-                _format_steps("When you buy a domain on HubRegistrar:", kb["buyer_purchase_flow"]),
+                _format_steps("When you buy a domain on Deltapreneur:", kb["buyer_purchase_flow"]),
                 "",
                 "Your payment is held securely until the domain transfer is completed and verified.",
             ]
@@ -805,10 +805,10 @@ def build_deterministic_response(message: str) -> str | None:
     if topic == "escrow":
         return "\n".join(
             [
-                "HubRegistrar uses an escrow-style payment process for domain purchases.",
+                "Deltapreneur uses an escrow-style payment process for domain purchases.",
                 "",
                 "1. Buyer completes payment.",
-                "2. HubRegistrar securely holds the payment.",
+                "2. Deltapreneur securely holds the payment.",
                 "3. Seller completes the domain transfer.",
                 "4. Transfer is verified.",
                 "5. Seller payout becomes eligible and is released after admin review.",

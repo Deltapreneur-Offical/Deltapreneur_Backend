@@ -13,7 +13,7 @@ _REGISTRAR_STEPS: dict[str, list[str]] = {
         "Enter the domain name.",
         "Enter the authorization code when prompted.",
         "Complete transfer checkout.",
-        "When the domain appears in your account, confirm transfer completion in HubRegistrar.",
+        "When the domain appears in your account, confirm transfer completion in Deltapreneur.",
     ],
     "namecheap": [
         "Log in to Namecheap.",
@@ -21,7 +21,7 @@ _REGISTRAR_STEPS: dict[str, list[str]] = {
         "Enter the domain name.",
         "Enter the authorization code when prompted.",
         "Pay the transfer fee if required and confirm.",
-        "When the domain appears in your account, confirm transfer completion in HubRegistrar.",
+        "When the domain appears in your account, confirm transfer completion in Deltapreneur.",
     ],
     "hostinger": [
         "Log in to Hostinger.",
@@ -30,7 +30,7 @@ _REGISTRAR_STEPS: dict[str, list[str]] = {
         "Enter the domain name.",
         "Enter the authorization code when prompted.",
         "Complete the transfer steps and approve any confirmation emails.",
-        "Confirm transfer completion in HubRegistrar once the domain is in your account.",
+        "Confirm transfer completion in Deltapreneur once the domain is in your account.",
     ],
     "cloudflare": [
         "Log in to the Cloudflare dashboard.",
@@ -38,7 +38,7 @@ _REGISTRAR_STEPS: dict[str, list[str]] = {
         "Enter the domain name.",
         "Enter the authorization code when prompted.",
         "Follow Cloudflare's transfer wizard to approve.",
-        "Confirm transfer completion in HubRegistrar once the domain is active.",
+        "Confirm transfer completion in Deltapreneur once the domain is active.",
     ],
     "dynadot": [
         "Log in to Dynadot.",
@@ -46,7 +46,7 @@ _REGISTRAR_STEPS: dict[str, list[str]] = {
         "Enter the domain name.",
         "Enter the authorization code when prompted.",
         "Complete checkout and approve transfer emails if required.",
-        "Confirm transfer completion in HubRegistrar once the domain is in your account.",
+        "Confirm transfer completion in Deltapreneur once the domain is in your account.",
     ],
     "porkbun": [
         "Log in to Porkbun.",
@@ -54,7 +54,7 @@ _REGISTRAR_STEPS: dict[str, list[str]] = {
         "Enter the domain name.",
         "Enter the authorization code when prompted.",
         "Complete the transfer checkout.",
-        "Confirm transfer completion in HubRegistrar once the domain is in your account.",
+        "Confirm transfer completion in Deltapreneur once the domain is in your account.",
     ],
     "name.com": [
         "Log in to Name.com.",
@@ -62,14 +62,14 @@ _REGISTRAR_STEPS: dict[str, list[str]] = {
         "Enter the domain name.",
         "Enter the authorization code when prompted.",
         "Complete the transfer process.",
-        "Confirm transfer completion in HubRegistrar once the domain is in your account.",
+        "Confirm transfer completion in Deltapreneur once the domain is in your account.",
     ],
     "default": [
         "Sign in to your registrar's control panel.",
         "Find Transfer domain in or Import domain.",
-        "Enter the domain name and paste the auth (EPP) code from HubRegistrar.",
+        "Enter the domain name and paste the auth (EPP) code from Deltapreneur.",
         "Approve any confirmation emails from your registrar.",
-        "When the domain is in your account, confirm transfer completion in HubRegistrar.",
+        "When the domain is in your account, confirm transfer completion in Deltapreneur.",
     ],
 }
 

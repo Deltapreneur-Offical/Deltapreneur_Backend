@@ -422,7 +422,7 @@ def production_readiness() -> dict[str, Any]:
     if "localhost" in frontend or "127.0.0.1" in frontend:
         if not reg.is_sandbox():
             warnings.append(
-                f"FRONTEND_BASE_URL is {frontend} — order emails/links should use https://hubregistrar.com in production.",
+                f"FRONTEND_BASE_URL is {frontend} — order emails/links should use https://www.deltapreneur.com in production.",
             )
 
     return {
@@ -452,7 +452,7 @@ class DomainRegistrationService:
         name = registrar_source()
         readiness = production_readiness()
         registrar_env = "sandbox" if reg.is_sandbox() else "live"
-        message = "Search availability, register securely, and manage your domains with HubRegistrar."
+        message = "Search availability, register securely, and manage your domains with Deltapreneur."
         return {
             "demoMode": demo,
             "razorpayTestMode": rzp.is_test_mode(),
@@ -1397,7 +1397,7 @@ class DomainRegistrationService:
                 price=snippet.askingPrice,
                 listing=snippet,
                 source="marketplace",
-                message="Domain is listed on HubRegistrar marketplace",
+                message="Domain is listed on Deltapreneur marketplace",
             )
 
         result = await self.check_openprovider_domain(
@@ -1468,7 +1468,7 @@ class DomainRegistrationService:
         full_domain = str(body.get("domain", "")).lower().strip()
         check = await self.check_registration_domain(full_domain)
         if check.status == "marketplace":
-            raise AppException("Domain is listed on HubRegistrar marketplace.", status_code=400)
+            raise AppException("Domain is listed on Deltapreneur marketplace.", status_code=400)
         if check.status != "available":
             raise AppException("Domain is not available for registration.", status_code=400)
 
@@ -3082,7 +3082,7 @@ class DomainRegistrationService:
             raise AppException(
                 sanitize_customer_registrar_message(
                     "This domain is still at the previous registrar. Transfer it to "
-                    "OpenProvider before managing nameservers in HubRegistrar. "
+                    "OpenProvider before managing nameservers in Deltapreneur. "
                     "See docs/LEGACY_RESELLERCLUB_TO_OPENPROVIDER.md."
                 ),
                 status_code=400,
@@ -3636,7 +3636,7 @@ class DomainRegistrationService:
         if not order.transfer_auth_code:
             raise AppException(
                 "This attempt has no saved authorization code. Re-enter your "
-                "domain and EPP/Auth Code on the Transfer to HubRegistrar form to retry.",
+                "domain and EPP/Auth Code on the Transfer to Deltapreneur form to retry.",
                 status_code=400,
             )
 
@@ -4729,7 +4729,7 @@ class DomainRegistrationService:
                     name=name,
                     extension_no_dot=ext,
                     owner_handle=handle,
-                    description=f"HubRegistrar order {order.id}",
+                    description=f"Deltapreneur order {order.id}",
                 )
 
             await mailcow_create_order(period_months=months, quantity=1)
@@ -5166,7 +5166,7 @@ class DomainRegistrationService:
             raise AppException(
                 sanitize_customer_registrar_message(
                     "This domain is still at the previous registrar and must be "
-                    "transferred to OpenProvider before DNS can be managed in HubRegistrar. "
+                    "transferred to OpenProvider before DNS can be managed in Deltapreneur. "
                     "See docs/LEGACY_RESELLERCLUB_TO_OPENPROVIDER.md."
                 ),
                 status_code=400,

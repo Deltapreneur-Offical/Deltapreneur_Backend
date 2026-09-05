@@ -4,7 +4,7 @@ Co-Venture is partnership-centric: applicants apply to join a venture as a
 partner / co-founder. Selecting a partner finalizes the partnership. When the
 listing has a partnership fee (deal_value), a venture deal is also created for
 admin approval and payment — same flow as venture sales. Free partnerships
-skip payment; HubRegistrar assists both parties via support@hubregistrar.com.
+skip payment; Deltapreneur assists both parties via support@deltapreneur.com.
 """
 
 from __future__ import annotations
@@ -211,7 +211,7 @@ class PartnershipService:
 
         The listing moves to PARTNERSHIP_FINALIZED. When deal_value > 0, a
         venture deal is created for admin approval and payment; free partnerships
-        proceed without payment and HubRegistrar assists via support@hubregistrar.com.
+        proceed without payment and Deltapreneur assists via support@deltapreneur.com.
         """
         application = await self._co_repo.get_by_id(application_id)
         if application is None:
@@ -284,9 +284,9 @@ class PartnershipService:
         partner_msg = (
             f"You were selected as a partner for {brand_name}. "
             + (
-                "Awaiting HubRegistrar admin approval before payment."
+                "Awaiting Deltapreneur admin approval before payment."
                 if gross_inr > 0
-                else "HubRegistrar will assist both parties with next steps."
+                else "Deltapreneur will assist both parties with next steps."
             )
         )
         _notify_sync(
@@ -305,7 +305,7 @@ class PartnershipService:
                 + (
                     " Awaiting admin approval before the partner can pay."
                     if gross_inr > 0
-                    else " HubRegistrar will assist both parties with next steps."
+                    else " Deltapreneur will assist both parties with next steps."
                 )
             ),
             target_url=deal_url,

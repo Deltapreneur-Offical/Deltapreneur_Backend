@@ -43,7 +43,7 @@ from app.utils.venture_enums import (
 
 logger = logging.getLogger(__name__)
 
-COBROTHER_CONTACT_EMAIL = "support@hubregistrar.com"
+COBROTHER_CONTACT_EMAIL = "support@deltapreneur.com"
 
 
 def coventure_gross_amount_inr(venture: Venture | None) -> float:
@@ -533,14 +533,14 @@ class VentureDealService:
             txn.seller_id,
             notification_type=NotificationType.VENTURE_DEAL_PAYMENT_RECEIVED,
             title="Payment Received",
-            message="Buyer payment is held in escrow. HubRegistrar will assist with next steps.",
+            message="Buyer payment is held in escrow. Deltapreneur will assist with next steps.",
             target_url=deal_url,
         )
         _notify_sync(
             buyer.id,
             notification_type=NotificationType.VENTURE_DEAL_PAYMENT_RECEIVED,
             title="Payment Confirmed",
-            message="Your payment was received. HubRegistrar will contact you shortly.",
+            message="Your payment was received. Deltapreneur will contact you shortly.",
             target_url=deal_url,
         )
 

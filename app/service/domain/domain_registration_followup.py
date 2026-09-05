@@ -94,16 +94,22 @@ def _order_dns_url(order_id: uuid.UUID) -> str:
     return f"{_order_detail_url(order_id)}#dns"
 
 
-HUBREGISTRAR_STOREFRONT_ORIGIN = "https://hubregistrar.com"
+def _customer_storefront_origin() -> str:
+    """Current Deltapreneur storefront origin for customer emails."""
+    base = (settings.FRONTEND_BASE_URL or "").strip().rstrip("/")
+    lowered = base.lower()
+    if base and "cobrother." not in lowered and "hubregistrar." not in lowered:
+        return base
+    return "https://www.deltapreneur.com"
 
 
 def hubregistrar_order_detail_url(order_id: uuid.UUID) -> str:
-    """Storefront order page on hubregistrar.com (registration-success email only)."""
-    return f"{HUBREGISTRAR_STOREFRONT_ORIGIN}/storefront/orders/{order_id}"
+    """Storefront order page (registration-success email)."""
+    return f"{_customer_storefront_origin()}/storefront/orders/{order_id}"
 
 
 def hubregistrar_order_dns_url(order_id: uuid.UUID) -> str:
-    """DNS tab on the HubRegistrar order page (registration-success email only)."""
+    """DNS tab on the storefront order page (registration-success email)."""
     return f"{hubregistrar_order_detail_url(order_id)}#dns"
 
 
@@ -173,9 +179,9 @@ def sanitize_customer_registrar_message(message: str) -> str:
         if "dns" in lower or "nameserver" in lower:
             return (
                 "DNS and nameserver management is not available for this domain yet. "
-                "Contact HubRegistrar support if you need help."
+                "Contact Deltapreneur support if you need help."
             )
-        return "This action is not available for this domain right now. Please contact HubRegistrar support."
+        return "This action is not available for this domain right now. Please contact Deltapreneur support."
     return text
 
 
@@ -265,15 +271,15 @@ def build_domain_management(order: DomainRegistrationOrder) -> dict[str, Any]:
     if can_manage:
         if can_manage_dns:
             dns_steps = [
-                "Open DNS & Nameservers on this order page in HubRegistrar.",
+                "Open DNS & Nameservers on this order page in Deltapreneur.",
                 "Add A, CNAME, or MX records to point your website or email.",
-                "Keep HubRegistrar managed nameservers unless you move DNS to another provider.",
+                "Keep Deltapreneur managed nameservers unless you move DNS to another provider.",
             ]
         else:
             dns_steps = [
-                "Open DNS & Nameservers on this order page in HubRegistrar.",
+                "Open DNS & Nameservers on this order page in Deltapreneur.",
                 "If you use custom nameservers, manage DNS at that provider.",
-                "To manage records in HubRegistrar, switch nameservers back to HubRegistrar managed DNS.",
+                "To manage records in Deltapreneur, switch nameservers back to Deltapreneur managed DNS.",
             ]
 
     return {

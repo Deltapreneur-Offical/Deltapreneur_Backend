@@ -649,7 +649,7 @@ async def _og_meta_with_availability(is_premium=False, status="available", price
 @pytest.mark.asyncio
 async def test_og_meta_standard_domain():
     meta = await _og_meta_with_availability(is_premium=False)
-    assert meta["title"] == "tidebrew.com | HubRegistrar"
+    assert meta["title"] == "tidebrew.com | Deltapreneur"
     assert "Standard Domain" in meta["description"]
     assert "Available" in meta["description"]
     assert "₹550.00/yr" in meta["description"]
@@ -661,7 +661,7 @@ async def test_og_meta_standard_domain():
 @pytest.mark.asyncio
 async def test_og_meta_premium_domain():
     meta = await _og_meta_with_availability(is_premium=True, price_inr=330702616.17)
-    assert meta["title"] == "tidebrew.com | Premium Domain | HubRegistrar"
+    assert meta["title"] == "tidebrew.com | Premium Domain | Deltapreneur"
     assert "Premium Domain" in meta["description"]
     assert "₹330,702,616.17 (1st Year)" in meta["description"]
     assert meta["is_premium"] is True
@@ -692,7 +692,7 @@ async def test_og_meta_falls_back_when_live_check_fails():
         new=AsyncMock(side_effect=RuntimeError("registrar down")),
     ):
         meta = await service.build_og_meta(_share())
-    assert meta["title"] == "tidebrew.com | HubRegistrar"
+    assert meta["title"] == "tidebrew.com | Deltapreneur"
     assert meta["is_premium"] is False
     assert "tidebrew.com" in meta["description"]
 

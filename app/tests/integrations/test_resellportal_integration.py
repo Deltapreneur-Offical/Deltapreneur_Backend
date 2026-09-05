@@ -185,7 +185,7 @@ async def test_ai_business_suite_requires_checkout_before_provisioning(monkeypat
         _noop,
     )
 
-    with pytest.raises(HTTPException, match="HubRegistrar cart checkout"):
+    with pytest.raises(HTTPException, match="Deltapreneur cart checkout"):
         await subscribe_technology_service(
             payload=SubscribeRequest(service_slug="ai-business-suite", plan_code="starter", billing_cycle="monthly"),
             current_user={"id": "user_123", "email": "owner@cobrother.com"},

@@ -96,7 +96,7 @@ def build_acquisition_timeline(
     }
     add(
         "in_progress",
-        "HubRegistrar team contacting you",
+        "Deltapreneur team contacting you",
         in_progress_at or (created_at if status_u == "IN_PROGRESS" else None),
         in_progress_reached and status_u != "DECLINED",
     )

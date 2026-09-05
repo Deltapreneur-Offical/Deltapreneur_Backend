@@ -316,9 +316,9 @@ class ShareService:
         show the current Standard vs Premium state. Never exposes internal IDs,
         registrar data, referrer identity, commission or Edge Point internals.
         """
-        title = f"{share.domain} | HubRegistrar" if share.domain else "HubRegistrar"
+        title = f"{share.domain} | Deltapreneur" if share.domain else "Deltapreneur"
         description = (
-            f"Shared on HubRegistrar: {share.domain}" if share.domain else "Check out this shared domain on HubRegistrar!"
+            f"Shared on Deltapreneur: {share.domain}" if share.domain else "Check out this shared domain on Deltapreneur!"
         )
         query = (share.original_query or "").strip()
         if query:
@@ -343,9 +343,9 @@ class ShareService:
             meta["status"] = status
             meta["price_inr"] = price_inr
             meta["title"] = (
-                f"{share.domain} | Premium Domain | HubRegistrar"
+                f"{share.domain} | Premium Domain | Deltapreneur"
                 if is_premium
-                else f"{share.domain} | HubRegistrar"
+                else f"{share.domain} | Deltapreneur"
             )
 
             # Live state summary — mirrors the shared page's presentation:
