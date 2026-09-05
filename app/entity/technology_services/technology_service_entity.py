@@ -33,3 +33,5 @@ class TechnologyServiceEntity(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMix
     display_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     price_override_monthly: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     price_override_annually: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    provider_product_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    provider_specific_params: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

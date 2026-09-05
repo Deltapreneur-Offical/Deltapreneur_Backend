@@ -14,7 +14,8 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -414,55 +415,91 @@ DEFAULT_SERVICES_SEED = [
 ]
 
 
-async def ensure_catalogue_seeded(db) -> None:
-    """Check if catalogue table has records; if not, create tables and seed all 17 services."""
-    try:
-        from app.core.database import engine
-        from app.entity.base import Base
-        Base.metadata.create_all(bind=engine, checkfirst=True)
-    except Exception as create_err:
-        logger.warning("Auto table creation deferred: %s", create_err)
+# Seeding is reference data that only ever needs to happen once. This guard
+# keeps the COUNT(*) off the hot path for every subsequent request in the
+# worker, so the catalogue endpoints do not pay a query to re-check an
+# already-populated table. Schema is owned by Alembic, never created here.
+_catalogue_seed_checked = False
 
+
+def _build_seed_entities() -> list[TechnologyServiceEntity]:
+    """Materialize DEFAULT_SERVICES_SEED as unsaved catalogue rows."""
+    return [
+        TechnologyServiceEntity(
+            slug=item["slug"],
+            name=item["name"],
+            category=item["category"],
+            short_description=item["short_description"],
+            long_description=item["long_description"],
+            badge=item["badge"],
+            icon=item["icon"],
+            is_featured=item["is_featured"],
+            display_order=item["display_order"],
+            features_json=json.dumps(item["features"]),
+            plans_json=json.dumps(item["plans"]),
+            faqs_json=json.dumps(item["faqs"]),
+            is_available=True,
+        )
+        for item in DEFAULT_SERVICES_SEED
+    ]
+
+
+def ensure_catalogue_seeded_sync(db: Session) -> None:
+    """Seed the catalogue on a sync Session if it is empty.
+
+    Sync counterpart of :func:`ensure_catalogue_seeded` for the non-async
+    endpoints. get_db() never commits, so the insert is committed here or the
+    seeded rows would be discarded when the session closes.
+    """
+    global _catalogue_seed_checked
+    if _catalogue_seed_checked:
+        return
     try:
-        if hasattr(db, "execute"):
-            from sqlalchemy import select, func
-            result = await db.execute(select(func.count(TechnologyServiceEntity.id)).where(TechnologyServiceEntity.is_deleted == False))
-            count = result.scalar_one()
-        else:
-            count = db.query(TechnologyServiceEntity).filter_by(is_deleted=False).count()
-        if count > 0:
-            return
-        logger.info("Seeding initial Technology Services catalogue (17 services)...")
-        for item in DEFAULT_SERVICES_SEED:
-            entity = TechnologyServiceEntity(
-                slug=item["slug"],
-                name=item["name"],
-                category=item["category"],
-                short_description=item["short_description"],
-                long_description=item["long_description"],
-                badge=item["badge"],
-                icon=item["icon"],
-                is_featured=item["is_featured"],
-                display_order=item["display_order"],
-                features_json=json.dumps(item["features"]),
-                plans_json=json.dumps(item["plans"]),
-                faqs_json=json.dumps(item["faqs"]),
-                is_available=True,
+        count = (
+            db.query(func.count(TechnologyServiceEntity.id))
+            .filter(TechnologyServiceEntity.is_deleted.is_(False))
+            .scalar()
+        ) or 0
+        if count == 0:
+            logger.info("Seeding initial Technology Services catalogue (%d services)...", len(DEFAULT_SERVICES_SEED))
+            db.add_all(_build_seed_entities())
+            db.commit()
+            logger.info("Technology Services catalogue seeded successfully.")
+        _catalogue_seed_checked = True
+    except IntegrityError:
+        # Another worker seeded concurrently; slug is unique so this is benign.
+        db.rollback()
+        _catalogue_seed_checked = True
+    except Exception as exc:
+        db.rollback()
+        logger.warning("Catalogue seeding skipped or deferred: %s", exc)
+
+
+async def ensure_catalogue_seeded(db: AsyncSession) -> None:
+    """Seed the catalogue on an AsyncSession if it is empty."""
+    global _catalogue_seed_checked
+    if _catalogue_seed_checked:
+        return
+    try:
+        result = await db.execute(
+            select(func.count(TechnologyServiceEntity.id)).where(
+                TechnologyServiceEntity.is_deleted.is_(False)
             )
-            db.add(entity)
-        if hasattr(db, "commit"):
-            if hasattr(db, "flush"):
-                await db.flush()
-            else:
-                db.commit()
-        logger.info("Technology Services catalogue seeded successfully.")
-    except Exception as e:
-        if hasattr(db, "rollback"):
-            if hasattr(db, "execute"):
-                await db.rollback()
-            else:
-                db.rollback()
-        logger.warning("Catalogue seeding skipped or deferred: %s", e)
+        )
+        count = result.scalar() or 0
+        if count == 0:
+            logger.info("Seeding initial Technology Services catalogue (%d services)...", len(DEFAULT_SERVICES_SEED))
+            db.add_all(_build_seed_entities())
+            await db.commit()
+            logger.info("Technology Services catalogue seeded successfully.")
+        _catalogue_seed_checked = True
+    except IntegrityError:
+        # Another worker seeded concurrently; slug is unique so this is benign.
+        await db.rollback()
+        _catalogue_seed_checked = True
+    except Exception as exc:
+        await db.rollback()
+        logger.warning("Catalogue seeding skipped or deferred: %s", exc)
 
 
 def _fallback_service_id(slug: str) -> str:
@@ -516,7 +553,7 @@ def list_technology_services(
 ) -> list[dict[str, Any]]:
     """List all available Technology Services from catalogue."""
     try:
-        ensure_catalogue_seeded(db)
+        ensure_catalogue_seeded_sync(db)
         query = db.query(TechnologyServiceEntity).filter(
             TechnologyServiceEntity.is_deleted == False,
             TechnologyServiceEntity.is_available == True,
@@ -567,7 +604,7 @@ def get_technology_service_detail(
 ) -> dict[str, Any]:
     """Get single Technology Service detail by slug."""
     try:
-        ensure_catalogue_seeded(db)
+        ensure_catalogue_seeded_sync(db)
         service = db.query(TechnologyServiceEntity).filter(
             TechnologyServiceEntity.slug == slug,
             TechnologyServiceEntity.is_deleted == False,
@@ -1113,7 +1150,7 @@ def update_admin_config(payload: AdminConfigUpdate) -> dict[str, Any]:
 @router.get("/admin/services")
 def get_admin_services(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
     """List catalogue services for Admin management with pricing overrides & margin."""
-    ensure_catalogue_seeded(db)
+    ensure_catalogue_seeded_sync(db)
     try:
         services = db.query(TechnologyServiceEntity).filter_by(is_deleted=False).order_by(TechnologyServiceEntity.display_order.asc()).all()
         result = []
@@ -1150,7 +1187,7 @@ def toggle_service_availability(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Enable or disable a Premium Tech service."""
-    ensure_catalogue_seeded(db)
+    ensure_catalogue_seeded_sync(db)
     try:
         service = db.query(TechnologyServiceEntity).filter_by(slug=slug).first()
         if service:
@@ -1177,7 +1214,7 @@ def override_service_price(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Set custom price override for a specific service."""
-    ensure_catalogue_seeded(db)
+    ensure_catalogue_seeded_sync(db)
     try:
         service = db.query(TechnologyServiceEntity).filter_by(slug=slug).first()
         if service:
