@@ -80,7 +80,7 @@ DEFAULT_SERVICES_SEED = [
         "is_featured": True,
         "display_order": 1,
         "short_description": "All-in-one AI platform for content creation, automated customer engagement, and business intelligence.",
-        "long_description": "Transform your enterprise workflow with HubRegistrar's AI Business Suite. Leverage state-of-the-art multi-model AI engines to draft content, summarize documents, analyze market trends, and automate repetitive tasks across your team.",
+        "long_description": "Transform your enterprise workflow with Deltapreneur's AI Business Suite. Leverage state-of-the-art multi-model AI engines to draft content, summarize documents, analyze market trends, and automate repetitive tasks across your team.",
         "features": ["AI Content Writer & Editor", "Automated Lead Scoring", "Smart Document Summarizer", "Multi-model LLM Switching", "24/7 AI Customer Copilot"],
         "plans": [
             {"code": "starter", "name": "Starter", "price_monthly": 29, "price_annually": 290, "features": ["Up to 50k Words/mo", "3 Team Members", "Standard Support"]},
@@ -89,7 +89,7 @@ DEFAULT_SERVICES_SEED = [
         ],
         "faqs": [
             {"question": "How quickly can my team start using AI Business Suite?", "answer": "Instant access. As soon as your subscription is activated, your team dashboard will be live."},
-            {"question": "Is my proprietary data kept confidential?", "answer": "Yes, all data processed through HubRegistrar AI Suite is encrypted in transit and at rest with zero model training on your private inputs."}
+            {"question": "Is my proprietary data kept confidential?", "answer": "Yes, all data processed through Deltapreneur AI Suite is encrypted in transit and at rest with zero model training on your private inputs."}
         ]
     },
     {
@@ -101,7 +101,7 @@ DEFAULT_SERVICES_SEED = [
         "is_featured": True,
         "display_order": 2,
         "short_description": "Next-gen visual web builder with custom domains, AI layout generator, and built-in SEO.",
-        "long_description": "Build high-converting, lightning-fast websites without writing a single line of code. HubRegistrar Website Builder provides drag-and-drop flexibility, custom SSL certificates, ultra-fast CDN delivery, and deep analytics.",
+        "long_description": "Build high-converting, lightning-fast websites without writing a single line of code. Deltapreneur Website Builder provides drag-and-drop flexibility, custom SSL certificates, ultra-fast CDN delivery, and deep analytics.",
         "features": ["Drag-and-Drop Drag Builder", "AI Page Generator", "Free SSL Certificate", "Custom Domain Integration", "Mobile-Optimized Responsive Layouts"],
         "plans": [
             {"code": "starter", "name": "Starter", "price_monthly": 15, "price_annually": 150, "features": ["5 Published Pages", "10GB Storage", "Free SSL"]},
@@ -109,7 +109,7 @@ DEFAULT_SERVICES_SEED = [
             {"code": "enterprise", "name": "Enterprise", "price_monthly": 99, "price_annually": 990, "features": ["Unmetered Bandwidth", "E-commerce Engine", "Multi-language Support"]}
         ],
         "faqs": [
-            {"question": "Can I connect my OpenProvider or custom domain?", "answer": "Yes, connecting any domain registered through HubRegistrar or third-party registrars takes just one click."}
+            {"question": "Can I connect my OpenProvider or custom domain?", "answer": "Yes, connecting any domain registered through Deltapreneur or third-party registrars takes just one click."}
         ]
     },
     {
@@ -121,7 +121,7 @@ DEFAULT_SERVICES_SEED = [
         "is_featured": True,
         "display_order": 3,
         "short_description": "Streamlined customer relationship management, sales pipeline tracking, and automated client follow-ups.",
-        "long_description": "Empower your sales team with HubRegistrar CRM. Track leads from first touchpoint to closed deal, automate email follow-up sequences, manage team tasks, and generate real-time revenue reports.",
+        "long_description": "Empower your sales team with Deltapreneur CRM. Track leads from first touchpoint to closed deal, automate email follow-up sequences, manage team tasks, and generate real-time revenue reports.",
         "features": ["Kanban Sales Pipeline", "Automated Email Sequences", "Contact & Lead Activity History", "Task & Reminder Scheduler", "Revenue Forecasting Reports"],
         "plans": [
             {"code": "starter", "name": "Starter", "price_monthly": 25, "price_annually": 250, "features": ["1,000 Leads", "2 Pipelines", "Email Sync"]},
@@ -129,7 +129,7 @@ DEFAULT_SERVICES_SEED = [
             {"code": "enterprise", "name": "Enterprise", "price_monthly": 149, "price_annually": 1490, "features": ["Unlimited Leads", "Custom Workflows", "Dedicated Manager"]}
         ],
         "faqs": [
-            {"question": "Can I import existing contacts via CSV?", "answer": "Yes, HubRegistrar CRM supports instant CSV contact imports with automatic duplicate detection."}
+            {"question": "Can I import existing contacts via CSV?", "answer": "Yes, Deltapreneur CRM supports instant CSV contact imports with automatic duplicate detection."}
         ]
     },
     {
@@ -161,7 +161,7 @@ DEFAULT_SERVICES_SEED = [
         "is_featured": False,
         "display_order": 5,
         "short_description": "Seamless online scheduling calendar with automatic video link generation and SMS reminders.",
-        "long_description": "Eliminate back-and-forth scheduling emails. Share your personalized HubRegistrar booking link, sync Google / Outlook calendars, and automatically dispatch meeting invitations and reminders.",
+        "long_description": "Eliminate back-and-forth scheduling emails. Share your personalized Deltapreneur booking link, sync Google / Outlook calendars, and automatically dispatch meeting invitations and reminders.",
         "features": ["Real-time Multi-Calendar Sync", "Automated Zoom/Google Meet Links", "Custom Booking Link & Page", "SMS & Email Reminders", "Buffer Time & Timezone Detection"],
         "plans": [
             {"code": "starter", "name": "Starter", "price_monthly": 10, "price_annually": 100, "features": ["1 Calendar Sync", "Unlimited Bookings", "Email Reminders"]},
@@ -181,7 +181,7 @@ DEFAULT_SERVICES_SEED = [
         "is_featured": False,
         "display_order": 6,
         "short_description": "Legally binding e-signatures, document audit trails, and contract templates.",
-        "long_description": "Sign contracts, NDAs, and proposals faster. HubRegistrar Document Signer offers bank-grade encryption, audit trails with IP timestamps, and legally compliant electronic signatures.",
+        "long_description": "Sign contracts, NDAs, and proposals faster. Deltapreneur Document Signer offers bank-grade encryption, audit trails with IP timestamps, and legally compliant electronic signatures.",
         "features": ["Legally Binding E-Signatures", "Audit Trail & Timestamp Certificates", "Reusable Contract Templates", "Multi-Signer Sequential Workflows", "Secure Cloud Storage"],
         "plans": [
             {"code": "starter", "name": "Starter", "price_monthly": 15, "price_annually": 150, "features": ["10 Envelopes/mo", "Basic Audit Trail", "Template Library"]},
@@ -201,7 +201,7 @@ DEFAULT_SERVICES_SEED = [
         "is_featured": True,
         "display_order": 7,
         "short_description": "Secure encrypted cloud storage, team file sharing, and version control.",
-        "long_description": "Store, backup, and collaborate on files with absolute privacy. HubRegistrar Cloud Storage features end-to-end encryption, automatic syncing, granular access permissions, and version restoration.",
+        "long_description": "Store, backup, and collaborate on files with absolute privacy. Deltapreneur Cloud Storage features end-to-end encryption, automatic syncing, granular access permissions, and version restoration.",
         "features": ["End-to-End Encrypted Vaults", "Granular Link Sharing & Passwords", "File Versioning & Rollback", "Team Workspace Folders", "High-Speed Global Sync"],
         "plans": [
             {"code": "starter", "name": "Starter", "price_monthly": 19, "price_annually": 190, "features": ["500 GB Storage", "2 Team Members", "High-speed Transfer"]},
@@ -229,7 +229,7 @@ DEFAULT_SERVICES_SEED = [
             {"code": "enterprise", "name": "Enterprise", "price_monthly": 120, "price_annually": 1200, "features": ["Dedicated Call Center Suite", "CRM Integration", "Call Analytics"]}
         ],
         "faqs": [
-            {"question": "Can I keep my existing phone number?", "answer": "Yes, HubRegistrar provides free number porting for qualified regions."}
+            {"question": "Can I keep my existing phone number?", "answer": "Yes, Deltapreneur provides free number porting for qualified regions."}
         ]
     },
     {
@@ -241,7 +241,7 @@ DEFAULT_SERVICES_SEED = [
         "is_featured": True,
         "display_order": 9,
         "short_description": "High-speed encrypted VPN network for safe browsing, remote access, and IP protection.",
-        "long_description": "Protect your company communications and sensitive data online. HubRegistrar VPN delivers strict strict zero-logs privacy, multi-gigabit encrypted servers in over 60 countries, and automatic kill-switch protection.",
+        "long_description": "Protect your company communications and sensitive data online. Deltapreneur VPN delivers strict strict zero-logs privacy, multi-gigabit encrypted servers in over 60 countries, and automatic kill-switch protection.",
         "features": ["AES-256 WireGuard Encryption", "Zero-Logs Privacy Guarantee", "60+ Global Server Locations", "Automatic Network Kill Switch", "Multi-Device Support"],
         "plans": [
             {"code": "starter", "name": "Starter", "price_monthly": 8, "price_annually": 80, "features": ["5 Simultaneous Devices", "Global Servers", "Zero-Logs"]},
@@ -301,7 +301,7 @@ DEFAULT_SERVICES_SEED = [
         "is_featured": False,
         "display_order": 12,
         "short_description": "Monitor brand reviews, automate feedback collection, and manage online sentiment.",
-        "long_description": "Build credibility and trust online. HubRegistrar Reputation Management monitors online reviews across Google, Trustpilot, and social networks, sends automated customer feedback requests, and displays review widgets on your site.",
+        "long_description": "Build credibility and trust online. Deltapreneur Reputation Management monitors online reviews across Google, Trustpilot, and social networks, sends automated customer feedback requests, and displays review widgets on your site.",
         "features": ["Multi-Platform Review Aggregator", "Automated SMS/Email Feedback Requests", "Custom Website Review Widgets", "Sentiment Analysis & Alerts", "AI Review Response Generator"],
         "plans": [
             {"code": "starter", "name": "Starter", "price_monthly": 30, "price_annually": 300, "features": ["1 Business Location", "Review Widgets", "Email Invites"]},
@@ -325,7 +325,7 @@ DEFAULT_SERVICES_SEED = [
         "features": ["Custom Theme & Style Editor", "Custom Domain Mapping", "Embed Videos, Music & Products", "Click & Conversion Analytics", "SEO Meta Customization"],
         "plans": [
             {"code": "starter", "name": "Starter", "price_monthly": 5, "price_annually": 50, "features": ["1 Bio Page", "Standard Themes", "Basic Analytics"]},
-            {"code": "pro", "name": "Pro", "price_monthly": 15, "price_annually": 150, "features": ["5 Bio Pages", "Custom Domain", "Remove HubRegistrar Badge", "E-commerce Links"]},
+            {"code": "pro", "name": "Pro", "price_monthly": 15, "price_annually": 150, "features": ["5 Bio Pages", "Custom Domain", "Remove Deltapreneur Badge", "E-commerce Links"]},
             {"code": "enterprise", "name": "Enterprise", "price_monthly": 35, "price_annually": 350, "features": ["Unlimited Pages", "Custom CSS/JS", "Team Collaboration"]}
         ],
         "faqs": [
@@ -361,7 +361,7 @@ DEFAULT_SERVICES_SEED = [
         "is_featured": False,
         "display_order": 15,
         "short_description": "Instant global mobile data eSIM profiles for 150+ countries with instant QR activation.",
-        "long_description": "Stay connected around the world without roaming fees. HubRegistrar eSIM offers instant digital mobile data packages for over 150 countries. Scan a QR code on your mobile device to activate instant high-speed data.",
+        "long_description": "Stay connected around the world without roaming fees. Deltapreneur eSIM offers instant digital mobile data packages for over 150 countries. Scan a QR code on your mobile device to activate instant high-speed data.",
         "features": ["Instant QR Digital Delivery", "150+ Countries & Regional Bundles", "Flexible Data Quotas (1GB - 50GB)", "High-Speed 4G/5G Connectivity", "No Physical SIM Swap Needed"],
         "plans": [
             {"code": "starter", "name": "Starter", "price_monthly": 15, "price_annually": 150, "features": ["3 GB Global Data", "30 Days Validity", "150+ Countries"]},
@@ -369,7 +369,7 @@ DEFAULT_SERVICES_SEED = [
             {"code": "enterprise", "name": "Enterprise", "price_monthly": 85, "price_annually": 850, "features": ["50 GB Corporate Pool", "Multi-Employee Profile Dispatch"]}
         ],
         "faqs": [
-            {"question": "How do I activate the eSIM?", "answer": "Scan the QR code displayed in your HubRegistrar dashboard using your smartphone camera."}
+            {"question": "How do I activate the eSIM?", "answer": "Scan the QR code displayed in your Deltapreneur dashboard using your smartphone camera."}
         ]
     },
     {
@@ -389,7 +389,7 @@ DEFAULT_SERVICES_SEED = [
             {"code": "enterprise", "name": "Enterprise", "price_monthly": 75, "price_annually": 750, "features": ["Unlimited Websites", "Unmetered NVMe Storage", "Dedicated CPU & RAM"]}
         ],
         "faqs": [
-            {"question": "Are site migrations free?", "answer": "Yes, HubRegistrar provides free migration assistance for qualified websites."}
+            {"question": "Are site migrations free?", "answer": "Yes, Deltapreneur provides free migration assistance for qualified websites."}
         ]
     },
     {
@@ -401,7 +401,7 @@ DEFAULT_SERVICES_SEED = [
         "is_featured": False,
         "display_order": 17,
         "short_description": "Curated suite of premium WordPress plugins for SEO, security, caching, and performance optimization.",
-        "long_description": "Supercharge your WordPress sites. Get instant licensed access to HubRegistrar's curated WordPress plugin pack, including enterprise caching, security firewalls, SEO optimization, and image compression tools.",
+        "long_description": "Supercharge your WordPress sites. Get instant licensed access to Deltapreneur's curated WordPress plugin pack, including enterprise caching, security firewalls, SEO optimization, and image compression tools.",
         "features": ["Enterprise Caching & Speed Engine", "Security Firewall & Malware Scanner", "AI SEO Meta Optimizer", "Automatic Image Compression", "1-Click License Activation"],
         "plans": [
             {"code": "starter", "name": "Starter", "price_monthly": 10, "price_annually": 100, "features": ["1 Site License", "Core Security & SEO Plugins", "Auto Updates"]},
@@ -689,7 +689,7 @@ async def subscribe_technology_service(
         raise HTTPException(
             status_code=400,
             detail=(
-                "AI Business Suite must be purchased through the HubRegistrar cart checkout flow "
+                "AI Business Suite must be purchased through the Deltapreneur cart checkout flow "
                 "after Razorpay payment verification. Direct provider provisioning is disabled."
             ),
         )
@@ -769,7 +769,7 @@ async def subscribe_technology_service(
         status="PAID",
         billing_period_start=prov_res.get("current_period_start") or datetime.now(timezone.utc),
         billing_period_end=prov_res.get("current_period_end") or datetime.now(timezone.utc) + timedelta(days=30),
-        payment_method="HubRegistrar Wallet / Card",
+        payment_method="Deltapreneur Wallet / Card",
     )
     db.add(inv)
     await db.commit()

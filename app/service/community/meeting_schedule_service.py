@@ -275,9 +275,9 @@ class MeetingScheduleService:
             if not access:
                 raise RuntimeError("No access_token in Google token response")
 
-            summary = m.topic or "HubRegistrar Meeting"
+            summary = m.topic or "Deltapreneur Meeting"
             desc_lines = [
-                "HubRegistrar Platform Meeting",
+                "Deltapreneur Platform Meeting",
                 "",
                 f"Requester: {_display_name(requester)}",
                 f"Lister: {_display_name(lister)}",
@@ -331,7 +331,7 @@ class MeetingScheduleService:
             message=(
                 f"Your meeting with {_display_name(requester)} is confirmed for "
                 f"{m.scheduled_at.date()} at {m.scheduled_at.strftime('%H:%M')} UTC. "
-                f"Topic: {m.topic or 'HubRegistrar Meeting'}"
+                f"Topic: {m.topic or 'Deltapreneur Meeting'}"
             ),
             target_url="/meetings",
         )

@@ -474,7 +474,7 @@ class WinnerPaymentLifecycleAsync:
         pay_path = track.get("payPath") or "/"
         from app.core.config import settings
 
-        base = (getattr(settings, "FRONTEND_BASE_URL", None) or "https://hubregistrar.com").rstrip("/")
+        base = (getattr(settings, "FRONTEND_BASE_URL", None) or "https://www.deltapreneur.com").rstrip("/")
         pay_url = f"{base}{pay_path}"
         if left == 0:
             subject = f"Final reminder: pay today for “{title}” or your account will be blocked"
@@ -483,7 +483,7 @@ class WinnerPaymentLifecycleAsync:
                 f"<p>This is your <strong>final reminder</strong>. You won <strong>{title}</strong> "
                 f"with a bid of <strong>₹{amount:,.2f}</strong>.</p>"
                 f"<p>If you do not complete payment <strong>today</strong>, your account will be "
-                f"<strong>blocked from bidding</strong> on HubRegistrar until an admin unblocks you.</p>"
+                f"<strong>blocked from bidding</strong> on Deltapreneur until an admin unblocks you.</p>"
                 f"<p><a href=\"{pay_url}\">Complete payment now</a></p>"
             )
         else:
@@ -532,7 +532,7 @@ class WinnerPaymentLifecycleAsync:
         pay_path = track.get("payPath") or "/"
         from app.core.config import settings
 
-        base = (getattr(settings, "FRONTEND_BASE_URL", None) or "https://hubregistrar.com").rstrip("/")
+        base = (getattr(settings, "FRONTEND_BASE_URL", None) or "https://www.deltapreneur.com").rstrip("/")
         pay_url = f"{base}{pay_path}"
         due_label = payment_due_label(track.get("dueAt")) or f"{PAYMENT_WINDOW_DAYS} days"
         body = (

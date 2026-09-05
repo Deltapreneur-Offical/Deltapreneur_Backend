@@ -263,8 +263,8 @@ class Settings(BaseSettings):
     DOMAIN_GST_ENABLED: bool = True
     DOMAIN_GST_RATE: float = 18.0
     DOMAIN_PRICE_GST_INCLUSIVE: bool = False
-    COBROTHER_GSTIN: str = ""
-    COBROTHER_BILLING_LEGAL_NAME: str = "CoBrother Technologies Pvt. Ltd."
+    COBROTHER_GSTIN: str = "29DXMPA9959L2ZF"
+    COBROTHER_BILLING_LEGAL_NAME: str = "Aultum International"
 
     # AI Domains (OpenRouter)
     AI_PROVIDER: str = "openrouter"

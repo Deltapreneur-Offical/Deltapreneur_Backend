@@ -174,7 +174,7 @@ def canonicalize_linkedin_profile_url(url: str | None) -> str | None:
         with httpx.Client(timeout=15.0, follow_redirects=True) as client:
             response = client.get(
                 normalized,
-                headers={"User-Agent": "HubRegistrar/1.0 (+https://hubregistrar.com)"},
+                headers={"User-Agent": "Deltapreneur/1.0 (+https://www.deltapreneur.com)"},
             )
             final = normalize_profile_url(str(response.url))
             if final and "/in/" in final:

@@ -36,7 +36,7 @@ from app.utils.venture_enums import (
 
 logger = logging.getLogger(__name__)
 
-COBROTHER_CONTACT_EMAIL = "support@hubregistrar.com"
+COBROTHER_CONTACT_EMAIL = "support@deltapreneur.com"
 
 
 def _serialize_pitch(
@@ -396,7 +396,7 @@ class VenturePitchService:
         brand_name = venture.brand_details.brand_name if venture.brand_details else "Venture"
         msg = (
             f"Deal finalized for {brand_name}. "
-            "Awaiting HubRegistrar admin approval before payment."
+            "Awaiting Deltapreneur admin approval before payment."
         )
         _notify_sync(
             app.buyer_user_id,

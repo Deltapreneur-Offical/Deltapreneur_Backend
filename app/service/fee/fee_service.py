@@ -118,7 +118,7 @@ class FeeService:
         finally:
             sync_db.close()
 
-        return {"success": True, "message": "Payment verified, HubRegistrar notified"}
+        return {"success": True, "message": "Payment verified, Deltapreneur notified"}
 
     async def cancel(self, request_id: uuid.UUID, *, lister: AppUser) -> dict[str, Any]:
         row = await self._repo.get_by_id(request_id)

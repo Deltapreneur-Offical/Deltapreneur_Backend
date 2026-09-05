@@ -165,7 +165,7 @@ class OpenRouterService:
                 "Authorization": f"Bearer {settings.OPENROUTER_API_KEY.strip()}",
                 "Content-Type": "application/json",
                 "HTTP-Referer": settings.FRONTEND_BASE_URL,
-                "X-Title": "HubRegistrar AI Domains",
+                "X-Title": "Deltapreneur AI Domains",
             },
             json=payload,
         )

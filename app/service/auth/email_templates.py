@@ -2,7 +2,7 @@ def otp_login_email_template(*, code: str) -> str:
     return f"""
     <html>
         <body>
-            <h2>Your HubRegistrar sign-in code</h2>
+            <h2>Your Deltapreneur sign-in code</h2>
             <p>Use this one-time code to sign in. It expires in 10 minutes.</p>
             <p style="font-size: 1.75rem; font-weight: 700; letter-spacing: 0.25rem;
                font-family: ui-monospace, monospace;">{_esc(code)}</p>
@@ -16,7 +16,7 @@ def otp_registration_email_template(*, code: str) -> str:
     return f"""
     <html>
         <body>
-            <h2>Verify your email to join HubRegistrar</h2>
+            <h2>Verify your email to join Deltapreneur</h2>
             <p>Enter this one-time code to complete your registration. It expires in 10 minutes.</p>
             <p style="font-size: 1.75rem; font-weight: 700; letter-spacing: 0.25rem;
                font-family: ui-monospace, monospace;">{_esc(code)}</p>
@@ -42,7 +42,7 @@ def feedback_email_template(
     return f"""
     <html>
         <body>
-            <h2>New HubRegistrar feedback</h2>
+            <h2>New Deltapreneur feedback</h2>
             <p><strong>Subject:</strong> {safe_subject}</p>
             <p><strong>From:</strong> {safe_from}</p>
             <p><strong>Type:</strong> {safe_type}</p>
@@ -66,7 +66,7 @@ def verification_email_template(
             <h2>Verify Your Email</h2>
 
             <p>
-                Thank you for registering with HubRegistrar.
+                Thank you for registering with Deltapreneur.
             </p>
 
             <p>
@@ -107,7 +107,7 @@ def domain_verification_email_template(
             <h2>Verify domain ownership</h2>
             <p>
                 You started ownership verification for <strong>{fqdn}</strong>
-                on HubRegistrar.
+                on Deltapreneur.
             </p>
             <p>
                 Click the button below to confirm you control this domain:
@@ -146,7 +146,7 @@ def software_purchase_receipt_email_template(
     <html>
         <body>
             <h2>Payment received — {software_name}</h2>
-            <p>Thank you for your purchase on HubRegistrar.</p>
+            <p>Thank you for your purchase on Deltapreneur.</p>
             <p>
                 Open your dashboard and confirm that everything works as expected.
                 After confirmation, your GitHub repository link will be available there.
@@ -233,7 +233,7 @@ def password_reset_email_template(reset_url: str) -> str:
             <h2>Reset Your Password</h2>
 
             <p>
-                We received a request to reset your HubRegistrar password.
+                We received a request to reset your Deltapreneur password.
             </p>
 
             <p>
@@ -299,7 +299,7 @@ def becobrother_application_email_template(
     <html>
         <body style="font-family: Arial, sans-serif;">
             <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-                <h2 style="color: #1a1a2e;">New HubRegistrar Elite Application</h2>
+                <h2 style="color: #1a1a2e;">New Deltapreneur Elite Application</h2>
                 <div style="background:#f4f4f4; padding:15px; border-radius:8px; margin:20px 0;">
                     <p><strong>Full Name:</strong> {_esc(full_name)}</p>
                     <p><strong>Email:</strong> {_esc(email)}</p>
@@ -325,10 +325,10 @@ def cobrother_fee_request_email_template(
     <html>
         <body style="font-family: Arial, sans-serif;">
             <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-                <h2 style="color: #1a1a2e;">HubRegistrar Service Request</h2>
+                <h2 style="color: #1a1a2e;">Deltapreneur Service Request</h2>
                 <p>Hi {_esc(lister_name)},</p>
                 <p>
-                    A HubRegistrar has been assigned to assist with your listing:
+                    A Deltapreneur has been assigned to assist with your listing:
                     <strong>{_esc(entity_title)}</strong>
                 </p>
                 <p>To proceed, a one-time service fee of <strong>₹1,000</strong> is required.</p>
@@ -365,7 +365,7 @@ def cobrother_assignment_email_template(
     <html>
         <body style="font-family: Arial, sans-serif;">
             <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-                <h2 style="color: #1a1a2e;">New HubRegistrar Request</h2>
+                <h2 style="color: #1a1a2e;">New Deltapreneur Request</h2>
                 <p>Hi {_esc(cobrother_name)},</p>
                 <p>You have been assigned a new request. Details below:</p>
                 <div style="background:#f4f4f4; padding:15px; border-radius:8px; margin:20px 0;">
@@ -378,7 +378,7 @@ def cobrother_assignment_email_template(
                     <p><strong>Applicant Email:</strong> {_esc(applicant_email or "—")}</p>
                     <p><strong>Applicant Phone:</strong> {_esc(applicant_phone or "—")}</p>
                 </div>
-                <p>Please log in to your HubRegistrar dashboard to accept or reject this request.</p>
+                <p>Please log in to your Deltapreneur dashboard to accept or reject this request.</p>
                 <p><a href="{_esc(dashboard_url)}">{_esc(dashboard_url)}</a></p>
             </div>
         </body>
@@ -525,7 +525,7 @@ def meeting_cancelled_email_template(
                     regarding <em>{_esc(auction_title)}</em>.
                 </p>
                 {reason_block}
-                <p style="color:#666;">You can schedule a new meeting from the HubRegistrar platform.</p>
+                <p style="color:#666;">You can schedule a new meeting from the Deltapreneur platform.</p>
             </div>
         </body>
     </html>
@@ -549,7 +549,7 @@ def domain_registration_receipt_email_template(
         <body style="font-family: Arial, sans-serif;">
             <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
                 <h2 style="color: #7c3aed;">Payment received — {_esc(fqdn)}</h2>
-                <p>Thank you for your domain registration payment on HubRegistrar.</p>
+                <p>Thank you for your domain registration payment on Deltapreneur.</p>
                 <p><strong>Amount:</strong> ₹{amount_inr:,.2f}</p>
                 {payment_line}
                 <p>We are registering your domain with the registrar. You will receive another email when it is active.</p>
@@ -598,7 +598,7 @@ def domain_registration_submitted_email_template(
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e5e7eb;">
                 <tr>
                   <td style="background:linear-gradient(135deg,#7c3aed,#4f46e5);padding:28px 28px 24px;">
-                    <p style="margin:0 0 8px;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.85);font-weight:700;">HubRegistrar Domains</p>
+                    <p style="margin:0 0 8px;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.85);font-weight:700;">Deltapreneur Domains</p>
                     <h1 style="margin:0;font-size:22px;line-height:1.3;color:#ffffff;">{title}</h1>
                     <p style="margin:10px 0 0;font-size:15px;"><a href="https://{_esc(fqdn)}" style="color:#ffffff;text-decoration:none;font-weight:500;">{_esc(fqdn)}</a></p>
                   </td>
@@ -613,7 +613,7 @@ def domain_registration_submitted_email_template(
                 </tr>
                 <tr>
                   <td style="padding:0 28px 24px;">
-                    <p style="margin:0;font-size:12px;line-height:1.5;color:#9ca3af;">Need help? Reply to this email or contact support@hubregistrar.com</p>
+                    <p style="margin:0;font-size:12px;line-height:1.5;color:#9ca3af;">Need help? Reply to this email or contact support@deltapreneur.com</p>
                   </td>
                 </tr>
               </table>
@@ -625,8 +625,8 @@ def domain_registration_submitted_email_template(
     """
 
 
-HUBREGISTRAR_EMAIL_LOGO_URL = "https://hubregistrar.com/email/hubregistrar-logo.png"
-HUBREGISTRAR_SITE_URL = "https://hubregistrar.com"
+HUBREGISTRAR_EMAIL_LOGO_URL = "https://www.deltapreneur.com/email/deltapreneur-logo.png"
+HUBREGISTRAR_SITE_URL = "https://www.deltapreneur.com"
 HUBREGISTRAR_SOCIAL_FACEBOOK = "https://www.facebook.com/share/16vjEWTjHi/"
 HUBREGISTRAR_SOCIAL_X = "https://x.com/CoBrother141506"
 HUBREGISTRAR_SOCIAL_LINKEDIN = "https://www.linkedin.com/company/hubregistrar/"
@@ -746,7 +746,7 @@ def domain_registration_active_email_template(
         for ns in clean_ns
     ) or """
                             <tr>
-                              <td style="padding:4px 0;font-size:13px;color:#6b7280;">HubRegistrar managed DNS</td>
+                              <td style="padding:4px 0;font-size:13px;color:#6b7280;">Deltapreneur managed DNS</td>
                             </tr>
     """
 
@@ -814,7 +814,7 @@ def domain_registration_active_email_template(
                           Trusted &#8226; Secure &#8226; Reliable
                         </td>
                         <td align="right" valign="middle" width="150" style="width:150px;">
-                          <img src="{_esc(logo_src)}" alt="HubRegistrar" width="150" height="38" style="display:block;border:0;outline:none;background:transparent;width:150px;max-width:100%;height:auto;margin-left:auto;" />
+                          <img src="{_esc(logo_src)}" alt="Deltapreneur" width="150" height="38" style="display:block;border:0;outline:none;background:transparent;width:150px;max-width:100%;height:auto;margin-left:auto;" />
                         </td>
                       </tr>
                     </table>
@@ -872,7 +872,7 @@ def domain_registration_active_email_template(
                           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;">
                             {ns_rows}
                           </table>
-                          <p style="margin:10px 0 0;font-size:12px;line-height:1.45;color:#6b7280;font-style:italic;">These are HubRegistrar managed nameservers for your domain DNS.</p>
+                          <p style="margin:10px 0 0;font-size:12px;line-height:1.45;color:#6b7280;font-style:italic;">These are Deltapreneur managed nameservers for your domain DNS.</p>
                         </td>
                       </tr>
                     </table>
@@ -897,13 +897,13 @@ def domain_registration_active_email_template(
                         <td class="email-px" valign="top" width="50%" style="width:50%;padding:16px 12px 16px 18px;">
                           <p style="margin:0 0 3px;font-size:12px;line-height:1.35;font-weight:700;color:#111827;">Need help?</p>
                           <p style="margin:0 0 5px;font-size:11px;line-height:1.4;color:#6b7280;">Our support team is here for you.</p>
-                          <a href="mailto:support@hubregistrar.com" style="color:#0B1F4A;font-size:11px;line-height:1.4;font-weight:700;text-decoration:none;word-break:break-word;">support@hubregistrar.com</a>
+                          <a href="mailto:support@deltapreneur.com" style="color:#0B1F4A;font-size:11px;line-height:1.4;font-weight:700;text-decoration:none;word-break:break-word;">support@deltapreneur.com</a>
                         </td>
                         <td valign="top" width="1" style="width:1px;background:#e5e7eb;font-size:1px;line-height:1px;">&nbsp;</td>
                         <td class="email-px" valign="top" width="50%" style="width:50%;padding:16px 18px 16px 12px;">
-                          <p style="margin:0 0 3px;font-size:12px;line-height:1.35;font-weight:700;color:#111827;">Thank you for choosing HubRegistrar.</p>
+                          <p style="margin:0 0 3px;font-size:12px;line-height:1.35;font-weight:700;color:#111827;">Thank you for choosing Deltapreneur.</p>
                           <p style="margin:0 0 5px;font-size:11px;line-height:1.4;color:#6b7280;">We're honored to be part of your online journey.</p>
-                          <p style="margin:0;font-size:11px;line-height:1.4;color:#0B1F4A;font-weight:700;">- The HubRegistrar team</p>
+                          <p style="margin:0;font-size:11px;line-height:1.4;color:#0B1F4A;font-weight:700;">- The Deltapreneur team</p>
                         </td>
                       </tr>
                     </table>
@@ -911,17 +911,17 @@ def domain_registration_active_email_template(
                 </tr>
                 <tr>
                   <td class="email-px" align="center" style="padding:18px 20px 8px;border-top:1px solid #eef2f6;">
-                    <p style="margin:0 0 8px;font-size:13px;font-weight:700;color:#0B1F4A;">HubRegistrar</p>
+                    <p style="margin:0 0 8px;font-size:13px;font-weight:700;color:#0B1F4A;">Deltapreneur</p>
                     <p style="margin:0 0 8px;font-size:11px;color:#6b7280;">Follow us</p>
                     <p style="margin:0 0 12px;">{fb_icon}&nbsp;{x_icon}&nbsp;{li_icon}</p>
                     <p style="margin:0;font-size:12px;line-height:1.4;color:#6b7280;">
-                      Visit us at <a href="{HUBREGISTRAR_SITE_URL}" style="color:#0B1F4A;font-weight:700;text-decoration:none;">hubregistrar.com</a>
+                      Visit us at <a href="{HUBREGISTRAR_SITE_URL}" style="color:#0B1F4A;font-weight:700;text-decoration:none;">www.deltapreneur.com</a>
                     </p>
                   </td>
                 </tr>
                 <tr>
                   <td class="email-px" align="center" style="padding:0 20px 18px;">
-                    <p style="margin:0;font-size:11px;color:#9ca3af;">&copy; 2026 HubRegistrar. All rights reserved.</p>
+                    <p style="margin:0;font-size:11px;color:#9ca3af;">&copy; 2026 Deltapreneur. All rights reserved.</p>
                   </td>
                 </tr>
               </table>
@@ -952,7 +952,7 @@ def domain_registration_raa_pending_email_template(
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e5e7eb;">
                 <tr>
                   <td style="background:linear-gradient(135deg,#d97706,#ea580c);padding:28px 28px 24px;">
-                    <p style="margin:0 0 8px;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.85);font-weight:700;">HubRegistrar Domains</p>
+                    <p style="margin:0 0 8px;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.85);font-weight:700;">Deltapreneur Domains</p>
                     <h1 style="margin:0;font-size:22px;line-height:1.3;color:#ffffff;">Verify your email</h1>
                     <p style="margin:10px 0 0;font-size:15px;color:rgba(255,255,255,0.92);">{_esc(fqdn)}</p>
                   </td>
@@ -971,7 +971,7 @@ def domain_registration_raa_pending_email_template(
                 </tr>
                 <tr>
                   <td style="padding:0 28px 24px;">
-                    <p style="margin:0;font-size:12px;line-height:1.5;color:#9ca3af;">Need help? Contact support@hubregistrar.com</p>
+                    <p style="margin:0;font-size:12px;line-height:1.5;color:#9ca3af;">Need help? Contact support@deltapreneur.com</p>
                   </td>
                 </tr>
               </table>
@@ -1008,7 +1008,7 @@ def domain_registration_failed_email_template(
                 <h2 style="color: #c0392b;">{heading}</h2>
                 <p>{intro}</p>
                 <p><strong>Details:</strong> {_esc(message)}</p>
-                <p>You can retry from the storefront or contact HubRegistrar support.</p>
+                <p>You can retry from the storefront or contact Deltapreneur support.</p>
                 <a href="{_esc(order_detail_url)}" style="display:inline-block;padding:12px 20px;background:#7c3aed;color:white;text-decoration:none;border-radius:6px;">View order</a>
             </div>
         </body>
@@ -1026,7 +1026,7 @@ def domain_transfer_seller_sold_email_template(
         <div style="max-width:600px;margin:0 auto;padding:20px;">
             <h2 style="color:#059669;">Your domain was sold — {_esc(fqdn)}</h2>
             <p>Hi {_esc(user_name)},</p>
-            <p>Please submit the transfer auth code in your HubRegistrar seller dashboard within the deadline.</p>
+            <p>Please submit the transfer auth code in your Deltapreneur seller dashboard within the deadline.</p>
         </div>
     </body></html>
     """
@@ -1089,7 +1089,7 @@ def seller_payout_details_reminder_email_template(*, payout_settings_url: str) -
     return f"""
     <html><body style="font-family: Arial, sans-serif;">
         <div style="max-width:600px;margin:0 auto;padding:20px;">
-            <h2 style="color:#d97706;">Action Required: Add Your HubRegistrar Payout Details</h2>
+            <h2 style="color:#d97706;">Action Required: Add Your Deltapreneur Payout Details</h2>
             <p>Hello,</p>
             <p>Your domain sale has been completed.</p>
             <p>Before we can release your payment, please configure your payout details.</p>
@@ -1098,7 +1098,7 @@ def seller_payout_details_reminder_email_template(*, payout_settings_url: str) -
                 <li>UPI ID</li>
                 <li>or Bank Account Details</li>
             </ul>
-            <p>Please log in to HubRegistrar and visit:</p>
+            <p>Please log in to Deltapreneur and visit:</p>
             <p><strong>Settings -&gt; Payout Settings</strong></p>
             <p>
                 <a href="{_esc(payout_settings_url)}"
@@ -1108,7 +1108,7 @@ def seller_payout_details_reminder_email_template(*, payout_settings_url: str) -
             </p>
             <p>If the button does not work: <a href="{_esc(payout_settings_url)}">{_esc(payout_settings_url)}</a></p>
             <p>Once your payout profile is complete, our team can release your payment.</p>
-            <p>Thank you,<br />HubRegistrar Team</p>
+            <p>Thank you,<br />Deltapreneur Team</p>
         </div>
     </body></html>
     """
@@ -1196,14 +1196,14 @@ def virtual_assistant_application_confirmation_email_template(
             <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
                 <h2 style="color: #1a1a2e;">Application Received</h2>
                 <p>Dear {_esc(full_name)},</p>
-                <p>Thank you for applying to become a Virtual Assistant at HubRegistrar. We have received your application and it is currently <strong>under review</strong>.</p>
+                <p>Thank you for applying to become a Virtual Assistant at Deltapreneur. We have received your application and it is currently <strong>under review</strong>.</p>
                 <div style="background:#f4f4f4; padding:15px; border-radius:8px; margin:20px 0;">
                     <p><strong>Reference Number:</strong> {_esc(reference_number)}</p>
                     <p style="color:#666; font-size:12px;">Submitted at: {_esc(submitted_at)}</p>
                 </div>
                 <p>Our team will carefully review your application and contact you via email once a decision has been made.</p>
-                <p>If you have any questions, please reply to this email or contact us at <a href="mailto:support@hubregistrar.com">support@hubregistrar.com</a>.</p>
-                <p>Thank you,<br />HubRegistrar Team</p>
+                <p>If you have any questions, please reply to this email or contact us at <a href="mailto:support@deltapreneur.com">support@deltapreneur.com</a>.</p>
+                <p>Thank you,<br />Deltapreneur Team</p>
             </div>
         </body>
     </html>
@@ -1262,7 +1262,7 @@ def virtual_assistant_role_decision_email_template(
         <div style="background:#ecfdf5; border:1px solid #6ee7b7; color:#065f46;
                     padding:14px; border-radius:8px; margin:18px 0;">
             <strong>🎉 Your Virtual Assistant Workspace has been unlocked!</strong><br />
-            You can now access your HubRegistrar Virtual Assistant Workspace to start receiving assignments.
+            You can now access your Deltapreneur Virtual Assistant Workspace to start receiving assignments.
         </div>
         """
     reviewer_html = ""
@@ -1291,8 +1291,8 @@ def virtual_assistant_role_decision_email_template(
                     <tbody>{rows}</tbody>
                 </table>
                 {unlock_html}
-                <p>If you have any questions, please reply to this email or contact us at <a href="mailto:support@hubregistrar.com">support@hubregistrar.com</a>.</p>
-                <p>Thank you,<br />HubRegistrar Team</p>
+                <p>If you have any questions, please reply to this email or contact us at <a href="mailto:support@deltapreneur.com">support@deltapreneur.com</a>.</p>
+                <p>Thank you,<br />Deltapreneur Team</p>
             </div>
         </body>
     </html>
@@ -1317,8 +1317,8 @@ def virtual_assistant_workspace_unlocked_email_template(
                     <p><strong>Reference Number:</strong> {_esc(reference_number)}</p>
                     <p style="margin-top:8px;"><a href="{_esc(login_url)}" style="color:#065f46; font-weight:600;">Access Your Workspace</a></p>
                 </div>
-                <p>If you have any questions, please reply to this email or contact us at <a href="mailto:support@hubregistrar.com">support@hubregistrar.com</a>.</p>
-                <p>Thank you,<br />HubRegistrar Team</p>
+                <p>If you have any questions, please reply to this email or contact us at <a href="mailto:support@deltapreneur.com">support@deltapreneur.com</a>.</p>
+                <p>Thank you,<br />Deltapreneur Team</p>
             </div>
         </body>
     </html>
@@ -1356,7 +1356,7 @@ def virtual_assistant_new_assignment_email_template(
                     {notes_block}
                 </div>
                 <p>Please log in to your workspace to view more details.</p>
-                <p>Thank you,<br />HubRegistrar Team</p>
+                <p>Thank you,<br />Deltapreneur Team</p>
             </div>
         </body>
     </html>
@@ -1388,7 +1388,7 @@ def virtual_assistant_assignment_cancelled_email_template(
                     {reason_block}
                 </div>
                 <p>Please log in to your workspace for the latest updates.</p>
-                <p>Thank you,<br />HubRegistrar Team</p>
+                <p>Thank you,<br />Deltapreneur Team</p>
             </div>
         </body>
     </html>
@@ -1410,7 +1410,7 @@ def premium_marketplace_buyer_confirmation_email_template(
             <div style="max-width: 640px; margin: 0 auto; padding: 28px 20px;">
                 <div style="background:#ffffff; border:1px solid #e8e6e1; border-radius:16px; padding:32px 28px;">
                     <p style="margin:0 0 6px; font-family:Arial,sans-serif; font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:#8a8578;">
-                        HubRegistrar Priority Managed Acquisition
+                        Deltapreneur Priority Managed Acquisition
                     </p>
                     <h2 style="margin:0 0 18px; font-size:26px; line-height:1.25; color:#111827;">
                         Priority Escalation: Managed Acquisition for {_esc(domain_fqdn)}
@@ -1419,7 +1419,7 @@ def premium_marketplace_buyer_confirmation_email_template(
                         Dear {_esc(buyer_name)},
                     </p>
                     <p style="font-family:Arial,sans-serif; font-size:15px; line-height:1.65; color:#374151;">
-                        Thank you for choosing HubRegistrar for your premium domain needs.
+                        Thank you for choosing Deltapreneur for your premium domain needs.
                         I am reaching out to confirm that we have received your managed acquisition
                         request for <strong>{_esc(domain_fqdn)}</strong>.
                     </p>
@@ -1463,7 +1463,7 @@ def premium_marketplace_buyer_confirmation_email_template(
                     <p style="font-family:Arial,sans-serif; font-size:15px; line-height:1.65; color:#374151; margin-bottom:0;">
                         Best regards,<br />
                         <strong>Priority Acquisition Specialist</strong><br />
-                        HubRegistrar<br />
+                        Deltapreneur<br />
                         080 8575 8575
                     </p>
                 </div>
@@ -1486,7 +1486,7 @@ def premium_marketplace_buyer_update_email_template(
         note_block = f"""
                 <div style="background:#f8f6f1; border:1px solid #ebe6dc; border-radius:12px; padding:16px; margin:18px 0;">
                     <p style="margin:0 0 6px; font-family:Arial,sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:0.08em; color:#8a8578;">
-                        Message from HubRegistrar
+                        Message from Deltapreneur
                     </p>
                     <p style="margin:0; font-family:Arial,sans-serif; font-size:14px; line-height:1.65; color:#1f2937; white-space:pre-wrap;">
                         {_esc(admin_message)}
@@ -1510,7 +1510,7 @@ def premium_marketplace_buyer_update_email_template(
                     You can reply directly to this email if you have questions —
                     our team is personally managing this acquisition with you.
                 </p>
-                <p>Thank you for your trust,<br />HubRegistrar Acquisition Team</p>
+                <p>Thank you for your trust,<br />Deltapreneur Acquisition Team</p>
             </div>
         </body>
     </html>
@@ -1579,7 +1579,7 @@ def technology_purchase_confirmation_email_template(
     <html>
         <body style="font-family: Arial, sans-serif;">
             <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-                <h2 style="color: #7c3aed;">Your HubRegistrar purchase is confirmed – {_esc(service_name)}</h2>
+                <h2 style="color: #7c3aed;">Your Deltapreneur purchase is confirmed – {_esc(service_name)}</h2>
                 <p>Hi {_esc(customer_name)},</p>
                 <p>Your purchase of <strong>{_esc(service_name)}</strong> – <strong>{_esc(plan_name)}</strong> was successful.</p>
                 <div style="background:#f4f4f4; padding:15px; border-radius:8px; margin:20px 0;">
@@ -1592,10 +1592,10 @@ def technology_purchase_confirmation_email_template(
                     {provider_line}
                     <p><strong>Purchase Date:</strong> {_esc(purchase_date)}</p>
                 </div>
-                <p>Your service has been successfully activated through HubRegistrar.</p>
+                <p>Your service has been successfully activated through Deltapreneur.</p>
                 <a href="{_esc(purchases_url)}" style="display:inline-block;padding:12px 20px;background:#7c3aed;color:white;text-decoration:none;border-radius:6px;">View My Purchase</a>
                 <p>If the button does not work: <a href="{_esc(purchases_url)}">{_esc(purchases_url)}</a></p>
-                <p>Thank you for choosing HubRegistrar.</p>
+                <p>Thank you for choosing Deltapreneur.</p>
             </div>
         </body>
     </html>
@@ -1641,7 +1641,7 @@ def technology_purchase_pending_email_template(
                 <p>Our team has been notified and will complete activation shortly. You will receive a confirmation email once your service is active.</p>
                 <a href="{_esc(purchases_url)}" style="display:inline-block;padding:12px 20px;background:#7c3aed;color:white;text-decoration:none;border-radius:6px;">View My Purchase</a>
                 <p>If the button does not work: <a href="{_esc(purchases_url)}">{_esc(purchases_url)}</a></p>
-                <p>Thank you for your patience,<br />HubRegistrar Support Team</p>
+                <p>Thank you for your patience,<br />Deltapreneur Support Team</p>
             </div>
         </body>
     </html>
@@ -1684,10 +1684,10 @@ def technology_purchase_failed_email_template(
                     <p><strong>Reason:</strong> {_esc(reason)}</p>
                     <p><strong>Purchase Date:</strong> {_esc(purchase_date)}</p>
                 </div>
-                <p>No further action is required from you right now — your payment is safe and has not been charged again. Please contact HubRegistrar support and quote your Order ID so we can activate your service or arrange a refund.</p>
+                <p>No further action is required from you right now — your payment is safe and has not been charged again. Please contact Deltapreneur support and quote your Order ID so we can activate your service or arrange a refund.</p>
                 <a href="{_esc(purchases_url)}" style="display:inline-block;padding:12px 20px;background:#7c3aed;color:white;text-decoration:none;border-radius:6px;">View My Purchase</a>
                 <p>If the button does not work: <a href="{_esc(purchases_url)}">{_esc(purchases_url)}</a></p>
-                <p>We apologise for the inconvenience,<br />HubRegistrar Support Team</p>
+                <p>We apologise for the inconvenience,<br />Deltapreneur Support Team</p>
             </div>
         </body>
     </html>

@@ -211,7 +211,7 @@ class DomainVerificationService:
             ),
             instructions=[
                 f"Open mailbox: {listing.whois_email}",
-                "Find verification mail from HubRegistrar.",
+                "Find verification mail from Deltapreneur.",
                 "Click verification link in that email.",
                 "Come back and click Check Verification.",
             ],

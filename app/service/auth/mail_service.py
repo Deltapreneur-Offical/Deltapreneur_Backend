@@ -62,7 +62,7 @@ class MailService:
         attachments: list | None = None,
         multipart_subtype: MultipartSubtypeEnum | None = None,
     ) -> MessageSchema:
-        """Build HTML outbound mail with default Reply-To (support@hubregistrar.com)."""
+        """Build HTML outbound mail with default Reply-To (support@deltapreneur.com)."""
         merged_reply: list[str] = list(reply_to or [])
         default_reply = settings.resolved_mail_reply_to()
         if default_reply and default_reply not in merged_reply:
@@ -132,7 +132,7 @@ class MailService:
     async def send_otp_login_email(email: str, code: str) -> None:
         html = otp_login_email_template(code=code)
         message = MailService._html_message(
-            subject="Your HubRegistrar sign-in code",
+            subject="Your Deltapreneur sign-in code",
             recipients=[email],
             body=html,
         )
@@ -143,7 +143,7 @@ class MailService:
     async def send_registration_otp_email(email: str, code: str) -> None:
         html = otp_registration_email_template(code=code)
         message = MailService._html_message(
-            subject="Verify your email — HubRegistrar",
+            subject="Verify your email — Deltapreneur",
             recipients=[email],
             body=html,
         )
@@ -199,7 +199,7 @@ class MailService:
             dashboard_url=dashboard_url,
         )
         message = MailService._html_message(
-            subject=f"HubRegistrar purchase received — {software_name}",
+            subject=f"Deltapreneur purchase received — {software_name}",
             recipients=[to_email],
             body=html,
         )
@@ -257,7 +257,7 @@ class MailService:
             purchases_url=purchases_url,
         )
         message = MailService._html_message(
-            subject=f"Your HubRegistrar purchase is confirmed – {service_name}",
+            subject=f"Your Deltapreneur purchase is confirmed – {service_name}",
             recipients=[to_email],
             body=html,
         )
@@ -405,7 +405,7 @@ class MailService:
             submitted_at=submitted_at,
         )
         message = MailService._html_message(
-            subject=f"New HubRegistrar Application — {full_name}",
+            subject=f"New Deltapreneur Application — {full_name}",
             recipients=[to_email],
             body=html,
         )
@@ -426,7 +426,7 @@ class MailService:
             payment_url=payment_url,
         )
         message = MailService._html_message(
-            subject=f"Action Required: HubRegistrar Service Fee — {entity_title}",
+            subject=f"Action Required: Deltapreneur Service Fee — {entity_title}",
             recipients=[to_email],
             body=html,
         )
@@ -623,7 +623,7 @@ class MailService:
             Path(__file__).resolve().parents[2]
             / "assets"
             / "email"
-            / "hubregistrar-logo.png"
+            / "deltapreneur-logo.png"
         )
         use_cid = logo_path.is_file()
         html = domain_registration_active_email_template(
@@ -633,7 +633,7 @@ class MailService:
             nameservers=nameservers,
             manage_dns_url=dns_url,
             customer_panel_url=customer_panel_url,
-            logo_url="cid:hubregistrar-logo" if use_cid else HUBREGISTRAR_EMAIL_LOGO_URL,
+            logo_url="cid:deltapreneur-logo" if use_cid else HUBREGISTRAR_EMAIL_LOGO_URL,
             registered_at=registered_at,
         )
         attachments = None
@@ -645,8 +645,8 @@ class MailService:
                     "mime_type": "image",
                     "mime_subtype": "png",
                     "headers": {
-                        "Content-ID": "<hubregistrar-logo>",
-                        "Content-Disposition": 'inline; filename="hubregistrar-logo.png"',
+                        "Content-ID": "<deltapreneur-logo>",
+                        "Content-Disposition": 'inline; filename="deltapreneur-logo.png"',
                     },
                 }
             ]
@@ -772,7 +772,7 @@ class MailService:
             payout_settings_url=payout_settings_url,
         )
         message = MailService._html_message(
-            subject="Action Required: Add Your HubRegistrar Payout Details",
+            subject="Action Required: Add Your Deltapreneur Payout Details",
             recipients=[to_email],
             body=html,
         )
