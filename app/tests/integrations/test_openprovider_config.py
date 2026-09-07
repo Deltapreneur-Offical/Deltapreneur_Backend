@@ -67,3 +67,8 @@ def test_openprovider_validation_blocks_test_razorpay_key(monkeypatch):
     assert any("Razorpay test keys" in issue for issue in report["blockingIssues"])
 
 
+def test_domain_registrar_ignores_resellerclub_provider():
+    s = _base_settings(DOMAIN_PROVIDER="resellerclub")
+    assert s.domain_registrar() == "openprovider"
+
+

@@ -107,12 +107,13 @@ function Warn-RegistrarCredentials {
         return
     }
 
-    $configured = & $python -c 'from app.core.config import settings; print("1" if settings.resellerclub_configured() else "0")'
+    # Domain search uses OpenProvider only. Do not require ResellerClub keys.
+    $configured = & $python -c 'from app.core.config import settings; print("1" if settings.openprovider_configured() else "0")'
     if ($configured -ne "1") {
         Write-Host ""
-        Write-Host "WARNING: ResellerClub credentials are missing from .env." -ForegroundColor Yellow
-        Write-Host "  Homepage domain search will return 503 until RESELLERCLUB_LIVE_* keys are set." -ForegroundColor Yellow
-        Write-Host "  Copy the Domain registrar block from .env.example." -ForegroundColor Yellow
+        Write-Host "WARNING: OpenProvider credentials are missing from .env." -ForegroundColor Yellow
+        Write-Host "  Homepage domain search will return 503 until OPENPROVIDER_USERNAME and OPENPROVIDER_PASSWORD are set." -ForegroundColor Yellow
+        Write-Host "  Copy the OpenProvider registrar block from .env.example." -ForegroundColor Yellow
         Write-Host ""
     }
 }

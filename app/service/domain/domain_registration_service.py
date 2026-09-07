@@ -372,20 +372,12 @@ def _require_registrar_runtime(
     if allow_demo_skip and is_demo_mode():
         return
     reg = active_registrar()
-    registrar_name = settings.domain_registrar()
-    if registrar_name == "resellerclub":
-        from app.integrations.resellerclub import runtime_validation as rc_runtime
-
-        report = rc_runtime.validate_resellerclub_runtime(
-            for_live_checkout=for_checkout and not settings.resellerclub_use_sandbox(),
-        )
-    else:
-        report = reg.validate_runtime(for_live_checkout=for_checkout and not reg.is_sandbox())
+    report = reg.validate_runtime(for_live_checkout=for_checkout and not reg.is_sandbox())
     if report["ready"]:
         return
     detail = "; ".join(report["blockingIssues"])
     raise AppException(
-        f"{registrar_name.upper()} is not correctly configured for "
+        f"{settings.domain_registrar().upper()} is not correctly configured for "
         f"{'live checkout' if for_checkout and not report['sandbox'] else 'current env'}: {detail}",
         status_code=503,
     )
