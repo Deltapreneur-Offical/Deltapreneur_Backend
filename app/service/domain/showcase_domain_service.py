@@ -396,6 +396,262 @@ class ShowcaseDomainService:
                 code="SHOWCASE_MIGRATION_REQUIRED",
             )
 
+    # ------------------------------------------------ exact-domain admin lookup
+
+    @staticmethod
+    def _normalize_lookup_input(domain_name: str, tld: str) -> tuple[str, str]:
+        """Parse admin name + TLD fields into a DNS-safe SLD and extension."""
+        from app.utils.domain_label import sanitize_extension, sanitize_sld
+
+        raw_name = str(domain_name or "").strip().lower()
+        raw_tld = str(tld or "").strip().lower()
+        if "." in raw_name:
+            raise AppException(
+                "Enter the domain name without the extension (e.g. example), "
+                "and the TLD separately (e.g. .com).",
+                status_code=400,
+                code="SHOWCASE_LOOKUP_INVALID",
+            )
+        name = sanitize_sld(raw_name)
+        tld_clean = sanitize_extension(raw_tld if "." in raw_tld else f"x.{raw_tld}")
+        if not name or not tld_clean:
+            raise AppException(
+                "Domain name and TLD are required. Example: example and .com",
+                status_code=400,
+                code="SHOWCASE_LOOKUP_INVALID",
+            )
+        return name, tld_clean
+
+    @staticmethod
+    def _lookup_reason(reasons: dict[str, int]) -> str | None:
+        for key in (
+            "invalid",
+            "marketplace_listed",
+            "taken",
+            "not_premium",
+            "no_price",
+            "tld_excluded",
+        ):
+            if int(reasons.get(key) or 0) > 0:
+                return key
+        return "not_premium"
+
+    @staticmethod
+    def _live_payload(
+        *,
+        fqdn: str,
+        tld: str,
+        item: dict[str, Any] | None,
+        available: bool,
+        is_premium: bool,
+        source: str,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        price = None
+        renewal = None
+        payable = None
+        if item:
+            try:
+                price = float(item.get("registrationPrice") or 0) or None
+            except (TypeError, ValueError):
+                price = None
+            try:
+                renewal = float(item["renewalPrice"]) if item.get("renewalPrice") else None
+            except (TypeError, ValueError):
+                renewal = None
+            if price:
+                try:
+                    payable = float(domain_price_breakdown(price, years=1)["totalInr"])
+                except Exception:
+                    payable = None
+        return {
+            "domainName": fqdn,
+            "tld": tld,
+            "available": bool(available),
+            "isPremium": bool(is_premium),
+            "source": source,
+            "createPriceInr": price,
+            "renewalPriceInr": renewal,
+            "payableInr": payable,
+            "registryTier": (item or {}).get("registryTier"),
+            "lastCheckedAt": datetime.now(timezone.utc).isoformat(),
+            "reason": reason,
+        }
+
+    async def lookup_exact_domain(self, *, domain_name: str, tld: str) -> dict[str, Any]:
+        """Live exact-FQDN OpenProvider check for the Admin Showcase search.
+
+        One registry ``domains/check`` (with_price). Aftermarket Afternic/Sedo
+        checks run only when the registry result is taken and the TLD is in
+        the existing Showcase aftermarket set. Never batch-searches TLDs,
+        never generates random/keyword candidates, never auto-Ticks.
+
+        The ``live`` payload is always from this check. An unselected candidate
+        row is created/updated only when existing Showcase eligibility rules
+        pass. Already-selected rows are never unselected.
+        """
+        name, ext = self._normalize_lookup_input(domain_name, tld)
+        fqdn = f"{name}.{ext}"
+
+        excluded = await self._active_marketplace_fqdns()
+        if fqdn in excluded:
+            live = self._live_payload(
+                fqdn=fqdn,
+                tld=ext,
+                item=None,
+                available=False,
+                is_premium=False,
+                source="marketplace",
+                reason="marketplace_listed",
+            )
+            existing = await self._repo.get_by_domain_name(fqdn)
+            return {
+                "eligible": False,
+                "canSelect": False,
+                "reason": "marketplace_listed",
+                "message": "This domain is listed on the Deltapreneur marketplace.",
+                "live": live,
+                "item": self.to_dict(existing) if existing else None,
+            }
+
+        from app.integrations.openprovider.client import check_domain, is_free
+        from app.service.domain.domain_registration_service import DomainRegistrationService
+
+        include_aftermarket = ext in _AFTERMARKET_TLDS
+        try:
+            raw = await check_domain(
+                name,
+                ext,
+                include_aftermarket=include_aftermarket,
+            )
+        except Exception as exc:
+            logger.warning("showcase.lookup.check_failed domain=%s err=%s", fqdn, exc)
+            raise AppException(
+                "Could not verify this domain with OpenProvider. Try again.",
+                status_code=502,
+                code="SHOWCASE_LOOKUP_PROVIDER_ERROR",
+            ) from exc
+
+        if not isinstance(raw, dict):
+            raise AppException(
+                "Could not verify this domain with OpenProvider. Try again.",
+                status_code=502,
+                code="SHOWCASE_LOOKUP_PROVIDER_ERROR",
+            )
+
+        items = DomainRegistrationService._build_tld_items([raw], name)
+        item = items[0] if items else None
+        if item and raw.get("_premium_provider") in ("afternic", "sedo"):
+            item["_premium_provider"] = raw["_premium_provider"]
+
+        available = bool(item.get("available")) if item else is_free(raw)
+        is_premium = bool(item.get("isPremium")) if item else bool(raw.get("is_premium"))
+        source = (
+            str(raw.get("_premium_provider")).lower()
+            if raw.get("_premium_provider") in ("afternic", "sedo")
+            else "registry"
+        )
+
+        picked, reasons = self._classify_items(
+            [item] if item else [],
+            allowed_tlds=[],
+            excluded_fqdns=excluded,
+            count=1,
+        )
+        eligible = bool(picked)
+        reason = None if eligible else (self._lookup_reason(reasons) if item else "taken")
+        if not item:
+            reason = "taken" if not available else "no_price"
+            eligible = False
+
+        live = self._live_payload(
+            fqdn=fqdn,
+            tld=ext,
+            item=item,
+            available=available,
+            is_premium=is_premium,
+            source=source,
+            reason=reason,
+        )
+
+        existing = await self._repo.get_by_domain_name(fqdn)
+        if existing is not None and existing.is_selected:
+            return {
+                "eligible": eligible,
+                "canSelect": False,
+                "alreadySelected": True,
+                "reason": reason,
+                "message": (
+                    None
+                    if eligible
+                    else "This domain is already ticked. Live OpenProvider status is shown; selection was not changed."
+                ),
+                "live": live,
+                "item": self.to_dict(existing),
+            }
+
+        if not eligible:
+            return {
+                "eligible": False,
+                "canSelect": False,
+                "reason": reason,
+                "message": {
+                    "taken": "This domain is not available for registration.",
+                    "not_premium": "OpenProvider did not return this as a premium Showcase domain.",
+                    "no_price": "OpenProvider did not return a live registration price.",
+                    "marketplace_listed": "This domain is listed on the Deltapreneur marketplace.",
+                    "invalid": "This domain is not a valid Showcase candidate.",
+                }.get(reason or "", "This domain is not eligible for the Showcase."),
+                "live": live,
+                "item": self.to_dict(existing) if existing else None,
+            }
+
+        try:
+            await self.ensure_table()
+        except AppException:
+            return {
+                "eligible": True,
+                "canSelect": False,
+                "reason": None,
+                "message": "Showcase is read-only on this database, so the live result was not saved.",
+                "live": live,
+                "item": self.to_dict(existing) if existing else None,
+            }
+
+        classified = picked[0]
+        now = datetime.now(timezone.utc)
+        if existing is not None:
+            fresh = self._make_row(name, classified)
+            existing.label = fresh.label
+            existing.tld = fresh.tld
+            existing.is_premium = fresh.is_premium
+            existing.source = fresh.source
+            existing.create_price_inr = fresh.create_price_inr
+            existing.renewal_price_inr = fresh.renewal_price_inr
+            existing.payable_inr = fresh.payable_inr
+            existing.price_snapshot_json = fresh.price_snapshot_json
+            existing.available = True
+            existing.last_checked_at = now
+            await self._repo.save(existing)
+            await self._session.commit()
+            saved = existing
+        else:
+            row = self._make_row(name, classified)
+            await self._repo.upsert_by_domain_name(row)
+            await self._session.commit()
+            saved = await self._repo.get_by_domain_name(fqdn)
+            if saved is None:
+                saved = row
+
+        return {
+            "eligible": True,
+            "canSelect": True,
+            "reason": None,
+            "message": None,
+            "live": live,
+            "item": self.to_dict(saved),
+        }
+
     # ------------------------------------------------------------ discovery
 
     async def _scan_catalog_for_label(
