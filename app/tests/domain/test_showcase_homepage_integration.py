@@ -179,10 +179,10 @@ def test_merge_marketplace_wins_on_duplicate():
     assert top["asking_price"] == 50_000.0
 
 
-def test_merge_sorts_by_updated_at_desc():
+def test_merge_pins_showcase_ahead_of_newer_marketplace():
     integration = ShowcaseHomepageIntegration(MagicMock())
     marketplace = [_marketplace("old.com")]
-    marketplace[0]["updated_at"] = "2024-01-01T00:00:00+00:00"
+    marketplace[0]["updated_at"] = "2026-09-07T23:00:00+00:00"
     showcase = [
         ShowcaseHomepageIntegration._to_feed_card(_row("new.io")),
         ShowcaseHomepageIntegration._to_feed_card(_row("mid.net")),
