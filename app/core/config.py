@@ -370,10 +370,11 @@ class Settings(BaseSettings):
 
     # ── ResellerClub registrar resolution ──────────────────────────────────
     def domain_registrar(self) -> str:
-        """Active registrar name. DOMAIN_PROVIDER wins when explicitly set."""
-        provider = (self.DOMAIN_PROVIDER or "").strip().lower()
-        if provider:
-            return provider
+        """Active registrar. Deltapreneur uses OpenProvider only.
+
+        DOMAIN_PROVIDER is ignored so a leftover ResellerClub value cannot
+        re-enable that registrar for search or checkout.
+        """
         return "openprovider"
 
     def resellerclub_use_sandbox(self) -> bool:
