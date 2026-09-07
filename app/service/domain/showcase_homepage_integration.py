@@ -13,9 +13,10 @@ Rules (read-only from the database — never writes):
 - Deduplication: if the same full domain already exists as a marketplace
   listing, the MARKETPLACE listing wins (existing public flow is never
   overridden); the showcase copy is dropped from the feed only.
-- Ordering: merged feed is sorted by ``updated_at`` DESC (nulls last), matching
-  the existing ``list_homepage_featured`` ordering so showcase cards interleave
-  naturally with admin/user featured listings.
+        - Selected showcase cards are pinned first so a just-ticked domain is
+          not pushed off the homepage 6-card preview by older featured listings.
+        - Remaining marketplace rows keep ``updated_at`` DESC ordering.
+
 
 Removing or disabling this module simply removes showcase domains from the
 homepage feed — nothing else is affected.
@@ -160,24 +161,32 @@ class ShowcaseHomepageIntegration:
 
         - Marketplace listings win on duplicate full-domain names (showcase copy
           is dropped from the feed only; the showcase row is untouched).
-        - Merged list is sorted by ``updated_at`` DESC (nulls last), matching the
-          existing homepage ordering.
+        - Selected showcase cards are pinned first so a just-ticked domain is
+          not pushed off the homepage 6-card preview by older featured listings.
+        - Remaining marketplace rows keep ``updated_at`` DESC ordering.
         """
-        merged: dict[str, dict[str, Any]] = {}
-
+        marketplace_by_key: dict[str, dict[str, Any]] = {}
         for row in marketplace_rows:
             key = _full_domain(row)
             if key:
-                merged[key] = row
+                marketplace_by_key[key] = row
 
+        pinned: list[dict[str, Any]] = []
+        seen: set[str] = set()
         for row in showcase_rows:
             key = _full_domain(row)
-            if not key or key in merged:
-                continue  # marketplace listing wins — never duplicate
-            merged[key] = row
+            if not key or key in seen:
+                continue
+            if key in marketplace_by_key:
+                pinned.append(marketplace_by_key[key])
+            else:
+                pinned.append(row)
+            seen.add(key)
 
-        return sorted(
-            merged.values(),
-            key=lambda r: _updated_at(r),
-            reverse=True,
-        )
+        rest = [
+            row
+            for key, row in marketplace_by_key.items()
+            if key not in seen
+        ]
+        rest.sort(key=_updated_at, reverse=True)
+        return pinned + rest
