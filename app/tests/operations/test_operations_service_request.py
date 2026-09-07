@@ -10,7 +10,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.core.exceptions import AppException
-from app.entity.user.app_user import AppUser
+from app.entity.operations.operations_service_request_entity import OperationsServiceRequest
+from app.model.operations.operations_service_request_mapper import (
+    build_operations_service_request_response,
+)
 from app.model.operations.operations_service_request_dto import (
     OperationsServiceRequestCreateBody,
     OperationsServiceRequestStatusBody,
@@ -78,6 +81,23 @@ def test_derive_request_meta_va():
 
 def test_derive_request_meta_compliance():
     assert _derive_request_meta("compliance") == ("booking", "one_time")
+
+
+def test_contact_status_column_is_mapped_on_entity():
+    assert "contact_status" in OperationsServiceRequest.__table__.columns
+    column = OperationsServiceRequest.__table__.columns["contact_status"]
+    assert column.nullable is False
+
+
+def test_mapper_includes_contact_status():
+    row = _request_row()
+    row.operations_service = SimpleNamespace(category="ops")
+    with patch(
+        "app.model.operations.operations_service_request_mapper.user_brief",
+        return_value=None,
+    ):
+        payload = build_operations_service_request_response(row)
+    assert payload["contactStatus"] == "CONTACT_PENDING"
 
 
 @pytest.mark.asyncio
