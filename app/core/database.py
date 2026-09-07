@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import NullPool
 
@@ -58,6 +57,47 @@ def _pgbouncer_prepared_statement_name() -> str:
     return f"__asyncpg_{uuid4()}__"
 
 
+def _positive_int(value: int) -> int:
+    return max(1, int(value))
+
+
+def _sync_connect_args() -> dict:
+    """psycopg2 connect_args: fail fast on dead/unreachable servers."""
+    timeout_ms = _positive_int(settings.DB_COMMAND_TIMEOUT_SECONDS) * 1000
+    return {
+        "connect_timeout": _positive_int(settings.DB_CONNECT_TIMEOUT_SECONDS),
+        "options": f"-c statement_timeout={timeout_ms}",
+    }
+
+
+def _async_connect_args(
+    *,
+    disable_statement_cache: bool = False,
+    unique_prepared_names: bool = False,
+) -> dict:
+    """asyncpg connect_args: connection + command timeouts (seconds)."""
+    args: dict = {
+        "timeout": _positive_int(settings.DB_CONNECT_TIMEOUT_SECONDS),
+        "command_timeout": _positive_int(settings.DB_COMMAND_TIMEOUT_SECONDS),
+    }
+    if disable_statement_cache or unique_prepared_names:
+        args["statement_cache_size"] = 0
+        args["prepared_statement_cache_size"] = 0
+    if unique_prepared_names:
+        args["prepared_statement_name_func"] = _pgbouncer_prepared_statement_name
+    return args
+
+
+def _queue_pool_kwargs(pool_size: int, max_overflow: int) -> dict:
+    """SQLAlchemy QueuePool settings. Do not use with NullPool."""
+    return {
+        "pool_recycle": settings.DB_POOL_RECYCLE_SECONDS,
+        "pool_size": pool_size,
+        "max_overflow": max_overflow,
+        "pool_timeout": settings.DB_POOL_TIMEOUT_SECONDS,
+    }
+
+
 def _to_sync_url(url: str) -> str:
     """Promote an async Postgres URL to the sync psycopg2 variant."""
     if url.startswith("postgresql+psycopg2://"):
@@ -72,6 +112,7 @@ _sync_pool_size, _sync_max_overflow = _effective_pool_settings()
 _sync_engine_kwargs: dict = {
     "pool_pre_ping": True,
     "future": True,
+    "connect_args": _sync_connect_args(),
 }
 
 if _uses_supabase_pooler(DATABASE_URL):
@@ -80,13 +121,9 @@ if _uses_supabase_pooler(DATABASE_URL):
         _sync_engine_kwargs["poolclass"] = NullPool
     else:
         # Session pooler (:5432) — keep SQLAlchemy pool tiny to respect session limits.
-        _sync_engine_kwargs["pool_recycle"] = settings.DB_POOL_RECYCLE_SECONDS
-        _sync_engine_kwargs["pool_size"] = _sync_pool_size
-        _sync_engine_kwargs["max_overflow"] = _sync_max_overflow
+        _sync_engine_kwargs.update(_queue_pool_kwargs(_sync_pool_size, _sync_max_overflow))
 else:
-    _sync_engine_kwargs["pool_recycle"] = settings.DB_POOL_RECYCLE_SECONDS
-    _sync_engine_kwargs["pool_size"] = _sync_pool_size
-    _sync_engine_kwargs["max_overflow"] = _sync_max_overflow
+    _sync_engine_kwargs.update(_queue_pool_kwargs(_sync_pool_size, _sync_max_overflow))
 
 engine = create_engine(
     _to_sync_url(DATABASE_URL),
@@ -124,12 +161,6 @@ def _to_async_url(url: str) -> str:
     return url
 
 
-_pooler_async_connect_args = {
-    "statement_cache_size": 0,
-    "prepared_statement_cache_size": 0,
-    "prepared_statement_name_func": _pgbouncer_prepared_statement_name,
-}
-
 _async_pool_size, _async_max_overflow = _effective_pool_settings()
 
 _async_engine_kwargs: dict = {
@@ -141,20 +172,23 @@ if _uses_supabase_pooler(DATABASE_URL):
     if _supabase_pooler_port(DATABASE_URL) == 6543:
         # Transaction pooler — disable SQLAlchemy pooling; unique prepared statement names.
         _async_engine_kwargs["poolclass"] = NullPool
-        _async_engine_kwargs["connect_args"] = _pooler_async_connect_args
+        _async_engine_kwargs["connect_args"] = _async_connect_args(
+            disable_statement_cache=True,
+            unique_prepared_names=True,
+        )
     else:
         # Session pooler (:5432) — keep SQLAlchemy pool; disable statement caches only.
-        _async_engine_kwargs["pool_recycle"] = settings.DB_POOL_RECYCLE_SECONDS
-        _async_engine_kwargs["pool_size"] = _async_pool_size
-        _async_engine_kwargs["max_overflow"] = _async_max_overflow
-        _async_engine_kwargs["connect_args"] = {
-            "statement_cache_size": 0,
-            "prepared_statement_cache_size": 0,
-        }
+        _async_engine_kwargs.update(
+            _queue_pool_kwargs(_async_pool_size, _async_max_overflow)
+        )
+        _async_engine_kwargs["connect_args"] = _async_connect_args(
+            disable_statement_cache=True,
+        )
 else:
-    _async_engine_kwargs["pool_recycle"] = settings.DB_POOL_RECYCLE_SECONDS
-    _async_engine_kwargs["pool_size"] = _async_pool_size
-    _async_engine_kwargs["max_overflow"] = _async_max_overflow
+    _async_engine_kwargs.update(
+        _queue_pool_kwargs(_async_pool_size, _async_max_overflow)
+    )
+    _async_engine_kwargs["connect_args"] = _async_connect_args()
 
 async_engine = create_async_engine(
     _to_async_url(DATABASE_URL),

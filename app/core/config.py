@@ -22,7 +22,15 @@ class Settings(BaseSettings):
 
     DB_MAX_OVERFLOW: int = 2
 
-    DB_POOL_RECYCLE_SECONDS: int = 300
+    # Recycle before typical RDS/NAT idle kills so pooled sockets are not half-open.
+    DB_POOL_RECYCLE_SECONDS: int = 90
+
+    # Fail fast instead of hanging 50–150s on dead connections (TCP timeout).
+    DB_CONNECT_TIMEOUT_SECONDS: int = 5
+
+    DB_POOL_TIMEOUT_SECONDS: int = 10
+
+    DB_COMMAND_TIMEOUT_SECONDS: int = 30
 
     # Disable auction timer + domain retry scheduler (saves DB connections in local dev).
     BACKGROUND_JOBS_ENABLED: bool = True
