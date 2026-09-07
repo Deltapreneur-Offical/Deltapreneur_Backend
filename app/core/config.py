@@ -283,6 +283,9 @@ class Settings(BaseSettings):
     # Cloudflare Turnstile (bot protection on auth/forms)
     TURNSTILE_SITE_KEY: str = ""
     TURNSTILE_SECRET_KEY: str = ""
+    # Comma-separated frontend hostnames allowed in siteverify. Production must
+    # not include localhost / 127.0.0.1. Example: www.deltapreneur.com,deltapreneur.com
+    TURNSTILE_HOSTNAMES: str = ""
 
     # Share & Earn anti-abuse limits (referral tracking / rewards)
     REFERRAL_TRACK_LIMIT_WINDOW_SECONDS: int = 3600
@@ -584,6 +587,32 @@ class Settings(BaseSettings):
 
     def turnstile_enabled(self) -> bool:
         return bool(self.TURNSTILE_SECRET_KEY.strip())
+
+    def turnstile_expected_hostnames(self) -> set[str]:
+        """Frontend hostnames Turnstile siteverify may return for this deployment.
+
+        Production never allows localhost / 127.0.0.1 even if they appear in env.
+        """
+        local_hosts = {"localhost", "127.0.0.1", "::1", "[::1]"}
+        raw = (self.TURNSTILE_HOSTNAMES or "").strip()
+        hosts = {part.strip().lower().rstrip(".") for part in raw.split(",") if part.strip()}
+        if not hosts:
+            host = (urlparse((self.FRONTEND_BASE_URL or "").strip()).hostname or "").lower().rstrip(".")
+            if host:
+                hosts.add(host)
+                if host.startswith("www."):
+                    hosts.add(host[4:])
+                else:
+                    hosts.add(f"www.{host}")
+        if self._is_production_env():
+            hosts -= local_hosts
+        return hosts
+
+    def turnstile_should_check_hostname(self) -> bool:
+        """Hostname allowlist is mandatory in production; local only if explicitly set."""
+        if self._is_production_env():
+            return True
+        return bool((self.TURNSTILE_HOSTNAMES or "").strip())
 
     def resolved_mail_reply_to(self) -> str:
         return (self.MAIL_REPLY_TO or "support@deltapreneur.com").strip()
