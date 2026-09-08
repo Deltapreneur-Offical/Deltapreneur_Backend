@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
+import uuid
 from typing import Any, TYPE_CHECKING
 
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException
@@ -62,6 +64,78 @@ def format_phone_display(phone: str | None) -> str:
     return phone.strip()
 
 
+def _addon_keys(addon_services: str | list | None) -> list[str]:
+    if isinstance(addon_services, str):
+        return [k.strip() for k in addon_services.split(",") if k.strip()]
+
+    keys: list[str] = []
+    for entry in addon_services or []:
+        if isinstance(entry, str):
+            key = entry.strip()
+        elif isinstance(entry, dict):
+            key = str(entry.get("key") or entry.get("service") or "").strip()
+        else:
+            key = ""
+        if key:
+            keys.append(key)
+    return keys
+
+
+async def resolve_live_compliance_addon_services(
+    session: AsyncSession,
+    addon_services: str | list | None,
+):
+    """Resolve selected cart add-ons from live Delta Registrar compliance services."""
+    keys = _addon_keys(addon_services)
+    if not keys:
+        return []
+
+    from app.entity.operations.operations_service_entity import OperationsService
+
+    service_ids: list[uuid.UUID] = []
+    for key in keys:
+        try:
+            service_ids.append(uuid.UUID(key))
+        except (TypeError, ValueError):
+            continue
+
+    lookup_conditions = [OperationsService.skills.in_(keys)]
+    if service_ids:
+        lookup_conditions.append(OperationsService.id.in_(service_ids))
+
+    stmt = select(OperationsService).where(
+        OperationsService.is_deleted.is_(False),
+        OperationsService.is_available.is_(True),
+        OperationsService.service_type == "compliance",
+        or_(*lookup_conditions),
+    )
+    result = await session.execute(stmt)
+    services = result.scalars().all()
+    by_id = {str(service.id): service for service in services}
+    by_skill = {service.skills: service for service in services if service.skills}
+
+    ordered = []
+    seen: set[str] = set()
+    for key in keys:
+        service = by_id.get(key) or by_skill.get(key)
+        if not service:
+            continue
+        service_id = str(service.id)
+        if service_id in seen:
+            continue
+        seen.add(service_id)
+        ordered.append(service)
+    return ordered
+
+
+async def resolve_live_compliance_addon_amount(
+    session: AsyncSession,
+    addon_services: str | list | None,
+) -> float:
+    services = await resolve_live_compliance_addon_services(session, addon_services)
+    return sum(float(service.price or 0) for service in services)
+
+
 async def create_addon_operations_requests(
     session: AsyncSession,
     *,
@@ -75,22 +149,10 @@ async def create_addon_operations_requests(
     if not addon_services_csv:
         return
 
-    from app.entity.operations.operations_service_entity import OperationsService
     from app.entity.operations.operations_service_request_entity import OperationsServiceRequest
-    from sqlalchemy import select
 
-    keys = [k.strip() for k in addon_services_csv.split(",") if k.strip()]
-    for key in keys:
-        # Find matching operations service
-        stmt = select(OperationsService).where(
-            OperationsService.skills == key,
-            OperationsService.is_deleted == False,
-        )
-        result = await session.execute(stmt)
-        service = result.scalar_one_or_none()
-        if not service:
-            continue
-
+    services = await resolve_live_compliance_addon_services(session, addon_services_csv)
+    for service in services:
         # Check if pending request already exists
         check_stmt = select(OperationsServiceRequest).where(
             OperationsServiceRequest.user_id == user_id,
