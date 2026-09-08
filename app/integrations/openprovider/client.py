@@ -762,13 +762,31 @@ async def _check_domain_raw(
         except json.JSONDecodeError as exc:
             raise RuntimeError("Registrar domains/check returned invalid JSON.") from exc
 
-    results = body.get("data", {}).get("results", [])
+    if not isinstance(body, dict):
+        raise RuntimeError("Registrar domains/check returned invalid JSON.")
+
+    code = body.get("code")
+    try:
+        code_int = int(code) if code is not None else 0
+    except (TypeError, ValueError):
+        code_int = -1
+    if code_int not in (0,):
+        raise RuntimeError(
+            _format_http_error(
+                "domains/check",
+                resp.status_code,
+                resp.text or json.dumps(body, default=str),
+            )
+        )
+
+    data = body.get("data")
+    results = data.get("results") or [] if isinstance(data, dict) else []
     if not results:
         logger.error(
             "[OPENPROVIDER_AVAILABILITY] Check response missing results provider=%s",
             provider or "registry",
         )
-        raise RuntimeError("Empty OpenProvider check response")
+        raise RuntimeError("Empty registrar domains/check response")
     return results[0]
 
 

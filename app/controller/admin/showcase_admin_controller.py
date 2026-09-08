@@ -1,7 +1,7 @@
 """Admin API for the OpenProvider Premium Showcase.
 
 All endpoints are ADMIN-only and operate purely on the showcase table +
-platform_settings. OpenProvider is called ONLY by generation/select/refresh —
+platform_settings. OpenProvider is called ONLY by lookup/generation/select/refresh —
 never by the list/config endpoints.
 """
 
@@ -63,6 +63,11 @@ class SelectRequest(BaseModel):
     id: str = Field(..., description="UUID of the showcase domain row")
 
 
+class LookupRequest(BaseModel):
+    domain_name: str = Field(..., min_length=1, max_length=63)
+    tld: str = Field(..., min_length=1, max_length=64)
+
+
 def _build_filters(
     search: Optional[str],
     tlds: Optional[str],
@@ -114,6 +119,25 @@ def _build_filters(
     if with_hyphen:
         filters["with_hyphen"] = True
     return {k: v for k, v in filters.items() if v is not None}
+
+
+@router.post("/lookup")
+async def lookup_exact_domain(
+    body: LookupRequest,
+    db: AsyncSession = Depends(get_async_db),
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
+) -> dict[str, Any]:
+    """Live exact-FQDN OpenProvider check for Admin Showcase search.
+
+    Declared as a static POST path so it is not captured by DELETE /{row_id}
+    (which produced HTTP 405 Method Not Allowed for POST /lookup).
+    """
+    svc = ShowcaseDomainService(db)
+    result = await svc.lookup_exact_domain(
+        domain_name=body.domain_name,
+        tld=body.tld,
+    )
+    return {"success": True, **result}
 
 
 @router.get("")

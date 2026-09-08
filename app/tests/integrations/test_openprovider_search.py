@@ -149,3 +149,42 @@ async def test_remaining_scan_offset_windows_are_contiguous(monkeypatch):
 
     # Exactly the full catalog, once each, in order.
     assert seen == catalog
+
+
+@pytest.mark.asyncio
+async def test_check_domain_raw_rejects_access_denied_body_without_crashing(monkeypatch):
+    """HTTP 200 + code 10005 + data null must not AttributeError on .get('results')."""
+    op_client.reset_openprovider_auth_state_for_tests()
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"desc":"Access denied.","code":10005,"data":null}'
+
+        def json(self):
+            return {"desc": "Access denied.", "code": 10005, "data": None}
+
+    class FakeClient:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc_info) -> None:
+            return None
+
+        async def post(self, _url: str, **_kwargs):
+            return FakeResponse()
+
+        async def request(self, *_a, **_k):
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        op_client, "_auth_headers", AsyncMock(return_value={"Authorization": "Bearer t"})
+    )
+    monkeypatch.setattr(op_client, "_base_url", lambda: "https://registrar.test")
+    monkeypatch.setattr(op_client.httpx, "AsyncClient", FakeClient)
+
+    with pytest.raises(RuntimeError) as exc:
+        await op_client._check_domain_raw("ventorly", "com")
+    assert "10005" in str(exc.value)
