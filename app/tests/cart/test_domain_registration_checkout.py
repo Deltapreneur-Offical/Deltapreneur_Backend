@@ -102,6 +102,115 @@ async def test_cleanup_stale_purchased_cart_items():
     cart_svc._repo.delete_items_by_ids.assert_called_once_with([item_stale.id], user_id)
 
 
+def _empty_scalars_result():
+    from unittest.mock import MagicMock
+
+    mock_scalars = MagicMock()
+    mock_scalars.all.return_value = []
+    mock_res = MagicMock()
+    mock_res.scalars.return_value = mock_scalars
+    return mock_res
+
+
+@pytest.mark.asyncio
+async def test_cleanup_does_not_drop_registration_for_unrelated_sold_listing():
+    import uuid
+    from unittest.mock import AsyncMock, MagicMock
+    from app.service.cart.cart_service import CartService
+    from app.utils.cart_enums import CartProductType
+    from app.utils.marketplace_enums import DomainListingStatus, MarketplacePaymentStatus
+
+    session = AsyncMock()
+    cart_svc = CartService(session)
+    user_id = uuid.uuid4()
+
+    item_reg = MagicMock()
+    item_reg.id = uuid.uuid4()
+    item_reg.product_type = CartProductType.DOMAIN_REGISTRATION
+    item_reg.product_id = uuid.uuid4()
+    item_reg.metadata_json = {"domainName": "stillavailable.com"}
+
+    cart_svc._repo.get_by_user = AsyncMock(return_value=[item_reg])
+    cart_svc._repo.delete_items_by_ids = AsyncMock(return_value=0)
+
+    sold_listing = MagicMock()
+    sold_listing.id = uuid.uuid4()
+    sold_listing.purchased_by_user_id = uuid.uuid4()
+    sold_listing.listed_by_user_id = uuid.uuid4()
+    sold_listing.domain_name = "stillavailable"
+    sold_listing.domain_extension = ".com"
+    sold_listing.domain_status = DomainListingStatus.SOLD
+    sold_listing.payment_status = MarketplacePaymentStatus.COMPLETED
+
+    listing_scalars = MagicMock()
+    listing_scalars.all.return_value = [sold_listing]
+    listing_res = MagicMock()
+    listing_res.scalars.return_value = listing_scalars
+
+    session.execute = AsyncMock(
+        side_effect=[
+            _empty_scalars_result(),  # registration orders
+            listing_res,  # sold marketplace listings
+            _empty_scalars_result(),  # software purchases
+            _empty_scalars_result(),  # technology subscriptions
+        ]
+    )
+
+    deleted = await cart_svc.cleanup_stale_purchased_cart_items(user_id)
+    assert deleted == 0
+    cart_svc._repo.delete_items_by_ids.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_drops_sold_marketplace_listing_cart_line():
+    import uuid
+    from unittest.mock import AsyncMock, MagicMock
+    from app.service.cart.cart_service import CartService
+    from app.utils.cart_enums import CartProductType
+    from app.utils.marketplace_enums import DomainListingStatus, MarketplacePaymentStatus
+
+    session = AsyncMock()
+    cart_svc = CartService(session)
+    user_id = uuid.uuid4()
+    listing_id = uuid.uuid4()
+
+    item_listing = MagicMock()
+    item_listing.id = uuid.uuid4()
+    item_listing.product_type = CartProductType.DOMAIN_LISTING
+    item_listing.product_id = listing_id
+    item_listing.metadata_json = {}
+
+    cart_svc._repo.get_by_user = AsyncMock(return_value=[item_listing])
+    cart_svc._repo.delete_items_by_ids = AsyncMock(return_value=1)
+
+    sold_listing = MagicMock()
+    sold_listing.id = listing_id
+    sold_listing.purchased_by_user_id = uuid.uuid4()
+    sold_listing.listed_by_user_id = uuid.uuid4()
+    sold_listing.domain_name = "soldname"
+    sold_listing.domain_extension = ".com"
+    sold_listing.domain_status = DomainListingStatus.SOLD
+    sold_listing.payment_status = MarketplacePaymentStatus.COMPLETED
+
+    listing_scalars = MagicMock()
+    listing_scalars.all.return_value = [sold_listing]
+    listing_res = MagicMock()
+    listing_res.scalars.return_value = listing_scalars
+
+    session.execute = AsyncMock(
+        side_effect=[
+            _empty_scalars_result(),
+            listing_res,
+            _empty_scalars_result(),
+            _empty_scalars_result(),
+        ]
+    )
+
+    deleted = await cart_svc.cleanup_stale_purchased_cart_items(user_id)
+    assert deleted == 1
+    cart_svc._repo.delete_items_by_ids.assert_called_once_with([item_listing.id], user_id)
+
+
 @pytest.mark.asyncio
 async def test_cart_cleanup_survives_pending_rollback_and_zero_rows():
     import uuid

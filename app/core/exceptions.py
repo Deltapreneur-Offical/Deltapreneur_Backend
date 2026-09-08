@@ -115,7 +115,13 @@ def register_exception_handlers(
         request: Request,
         exc: AppException
     ):
-
+        logger.warning(
+            "AppException status=%s code=%s path=%s message=%s",
+            exc.status_code,
+            getattr(exc, "code", None),
+            request.url.path,
+            exc.message,
+        )
         content = {
             "success": False,
             "message": exc.message,

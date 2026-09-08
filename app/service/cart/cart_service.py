@@ -372,21 +372,26 @@ class CartService:
 
         stmt_listings = select(DomainListing).where(
             (DomainListing.purchased_by_user_id == user_id)
-            | (
-                (DomainListing.listed_by_user_id != user_id)
-                & (
-                    (DomainListing.domain_status == DomainListingStatus.SOLD)
-                    | (DomainListing.payment_status == MarketplacePaymentStatus.COMPLETED)
-                )
-            )
+            | (DomainListing.domain_status == DomainListingStatus.SOLD)
+            | (DomainListing.payment_status == MarketplacePaymentStatus.COMPLETED)
         )
         res_listings = await self._session.execute(stmt_listings)
         purchased_listings = res_listings.scalars().all()
         purchased_listing_ids: set[uuid.UUID] = {
             l.id for l in purchased_listings if l.purchased_by_user_id == user_id
         }
+        sold_listing_ids: set[uuid.UUID] = {
+            l.id
+            for l in purchased_listings
+            if l.domain_status == DomainListingStatus.SOLD
+            or l.payment_status == MarketplacePaymentStatus.COMPLETED
+        }
 
+        # Only THIS buyer's purchased listing FQDNs join registration cleanup.
+        # Globally sold marketplace names must not wipe unrelated registration lines.
         for l in purchased_listings:
+            if l.purchased_by_user_id != user_id:
+                continue
             fqdn = f"{l.domain_name}{l.domain_extension or ''}".lower().strip()
             if fqdn:
                 purchased_domains.add(fqdn)
@@ -444,8 +449,7 @@ class CartService:
                     stale_item_ids.append(item.id)
 
             elif item.product_type == CartProductType.DOMAIN_LISTING:
-                dn = str(meta.get("domainName") or meta.get("fullDomain") or "").lower().strip()
-                if item.product_id in purchased_listing_ids or (dn and dn in purchased_domains):
+                if item.product_id in purchased_listing_ids or item.product_id in sold_listing_ids:
                     stale_item_ids.append(item.id)
 
             elif item.product_type == CartProductType.TECHNOLOGY:
