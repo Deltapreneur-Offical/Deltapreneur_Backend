@@ -24,7 +24,7 @@ from app.schemas.cart_schemas import (
     CartResponse,
     UpdateCartItemRequest,
 )
-from app.utils.addon_services import ADDON_PRICES
+from app.utils.addon_services import resolve_live_compliance_addon_amount
 from app.utils.cart_enums import CartProductType
 from app.utils.domain_gst import domain_price_breakdown
 from app.utils.cocreation_enums import SoftwareStatus, SoftwarePurchaseType
@@ -601,7 +601,7 @@ class CartService:
         available: bool = True
 
         addon_keys = [k.strip() for k in (item.addon_services or "").split(",") if k.strip()]
-        addon_amount = sum(float(ADDON_PRICES.get(k, 0)) for k in addon_keys)
+        addon_amount = await resolve_live_compliance_addon_amount(self._session, addon_keys)
         co_brother_fee = COBROTHER_FEE_INR if item.co_brother_opt_in else 0.0
 
         if item.product_type == CartProductType.DOMAIN_LISTING:

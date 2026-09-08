@@ -29,7 +29,10 @@ from app.service.resellportal.product_mapper import (
     is_provider_mapped,
     validate_order_input,
 )
-from app.utils.addon_services import ADDON_PRICES, create_addon_operations_requests
+from app.utils.addon_services import (
+    create_addon_operations_requests,
+    resolve_live_compliance_addon_amount,
+)
 from app.utils.cart_enums import CartProductType
 from app.utils.cocreation_enums import (
     SoftwarePaymentStatus,
@@ -1096,7 +1099,7 @@ class CartCheckoutService:
 
     async def _resolve_line_total(self, item: CartItem, buyer: AppUser) -> float | None:
         addon_keys = [k.strip() for k in (item.addon_services or "").split(",") if k.strip()]
-        addon_amount = sum(float(ADDON_PRICES.get(k, 0)) for k in addon_keys)
+        addon_amount = await resolve_live_compliance_addon_amount(self._session, addon_keys)
         co_brother_fee = COBROTHER_FEE_INR if item.co_brother_opt_in else 0.0
 
         base_price = 0.0
