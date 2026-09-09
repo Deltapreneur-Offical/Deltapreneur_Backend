@@ -69,15 +69,17 @@ async def admin_set_tax_invoice(
 @router.get("/commission")
 async def get_commission_config(
     _admin: AppUser = Depends(require_role(["ADMIN"])),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
     """Return current commission/markup rates for all domain services."""
-    return {"success": True, "data": commission.load()}
+    return {"success": True, "data": await commission.refresh_from_db(db)}
 
 
 @router.put("/commission")
 async def update_commission_config(
     body: dict,
     _admin: AppUser = Depends(require_role(["ADMIN"])),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
     """Update commission/markup rates. Body should match the commission config schema."""
     try:
@@ -85,13 +87,13 @@ async def update_commission_config(
         allowed = set(commission.CommissionService.ALL)
         filtered = {k: v for k, v in body.items() if k in allowed}
         # Load existing and merge
-        current = commission.load()
+        current = await commission.refresh_from_db(db)
         for key, val in filtered.items():
             if isinstance(val, dict):
                 current[key] = {**current.get(key, {}), **val}
             else:
                 current[key] = val
-        commission.save(current)
+        current = await commission.save(db, current)
         # Invalidate cached storefront search responses so the new commission is
         # reflected immediately instead of after the cache TTL.
         from app.service.domain.domain_registration_service import clear_tld_search_cache
