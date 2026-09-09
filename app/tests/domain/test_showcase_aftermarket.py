@@ -408,6 +408,7 @@ async def test_refresh_aftermarket_uses_check_price():
         "batterify", _item("batterify.com", price=600000.0, provider="afternic")
     )
     row.is_selected = True
+    row.renewal_price_inr = None
     svc._repo = MagicMock()
     svc._repo.list_selected_for_refresh = AsyncMock(return_value=[row])
     svc._repo.save = AsyncMock(side_effect=lambda r: r)
@@ -429,15 +430,21 @@ async def test_refresh_aftermarket_uses_check_price():
     fake_reg_svc.check_registration_domain = AsyncMock(return_value=FakeCheck())
     fake_reg_svc.quote_registration_period_price = AsyncMock(return_value={})
 
+    renew_price = AsyncMock(
+        return_value={"price": {"reseller": {"price": 1041.48, "currency": "INR"}}}
+    )
+
     with patch(
         "app.service.domain.domain_registration_service.DomainRegistrationService",
         return_value=fake_reg_svc,
-    ):
+    ), patch("app.integrations.openprovider.client.get_domain_price", new=renew_price):
         result = await svc.refresh_selected()
 
     assert result["refreshed"] == 1
     assert result["removed_unavailable"] == 0
     assert row.create_price_inr == 660000.0
+    assert row.renewal_price_inr == 1041.48
+    renew_price.assert_awaited_once_with("batterify", "com", operation="renew", period=1)
     fake_reg_svc.quote_registration_period_price.assert_not_awaited()
 
 

@@ -12,7 +12,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import text, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.entity.platform.platform_setting_entity import PlatformSetting
@@ -119,6 +119,14 @@ class ShowcaseConfigService:
 
     # ------------------------------------------------------------------ locks
 
+    async def _config_row_updated_at(self):
+        result = await self._session.execute(
+            select(PlatformSetting.updated_at).where(
+                PlatformSetting.setting_key == KEY_SHOWCASE_CONFIG
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def claim_generation_lock(self) -> bool:
         """Atomically claim the generation lock (cross-process safe).
 
@@ -147,6 +155,12 @@ class ShowcaseConfigService:
         if current.get("generation_lock"):
             # Auto-release stale locks (e.g. server crashed mid-generation).
             updated_at = current.get("updated_at")
+            if not updated_at:
+                try:
+                    updated_at = await self._config_row_updated_at()
+                except Exception:
+                    logger.exception("showcase.lock.timestamp_lookup_failed")
+                    return False
             if updated_at:
                 try:
                     if isinstance(updated_at, str):
@@ -164,7 +178,11 @@ class ShowcaseConfigService:
                     logger.exception("showcase.lock.stale_check_failed")
                     return False
             else:
-                return False
+                logger.warning("showcase.lock.stale_auto_release missing timestamp")
+                await self.release_generation_lock()
+                current = await self.get()
+                if current.get("generation_lock"):
+                    return False
         if current.get("generation_lock"):
             return False
         now = datetime.now(timezone.utc)

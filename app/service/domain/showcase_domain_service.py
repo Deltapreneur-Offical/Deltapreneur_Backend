@@ -344,6 +344,39 @@ async def _enrich_renewal_prices(items: list[dict[str, Any]]) -> None:
     await asyncio.gather(*[_limited(it) for it in pending])
 
 
+async def _backfill_row_renewal_price(row: Any) -> bool:
+    """Fill one persisted showcase row's missing renewal price via OP GetPrice renew."""
+    if row.renewal_price_inr is not None:
+        return False
+    domain = str(row.domain_name or "").strip().lower()
+    name, sep, ext = domain.partition(".")
+    if not sep or not name or not ext:
+        logger.warning("showcase.renewal_backfill skipped invalid domain=%r", row.domain_name)
+        return False
+    item = {
+        "domain": domain,
+        "name": name,
+        "tld": f".{ext}",
+        "available": True,
+        "renewalPrice": None,
+    }
+    await _enrich_renewal_prices([item])
+    renewal = item.get("renewalPrice")
+    if renewal is None:
+        return False
+    try:
+        row.renewal_price_inr = round(float(renewal), 2)
+        return True
+    except (TypeError, ValueError) as exc:
+        logger.warning(
+            "showcase.renewal_backfill invalid_price domain=%s renewal=%r err=%s",
+            domain,
+            renewal,
+            exc,
+        )
+        return False
+
+
 class ShowcaseDomainService:
     def __init__(self, session) -> None:
         self._session = session
@@ -591,6 +624,13 @@ class ShowcaseDomainService:
             if raw.get("_premium_provider") in ("afternic", "sedo")
             else "registry"
         )
+        if (
+            item
+            and available
+            and is_premium
+            and item.get("renewalPrice") is None
+        ):
+            await _enrich_renewal_prices([item])
 
         picked, reasons = self._classify_items(
             [item] if item else [],
@@ -1262,6 +1302,86 @@ class ShowcaseDomainService:
         await self._session.commit()
         return True
 
+    async def backfill_missing_renewal_prices(self, *, limit: int = 200) -> dict[str, Any]:
+        """Renewal-only repair for persisted Showcase rows.
+
+        This intentionally does not re-check availability, registration price,
+        payable price, source, selected state, or last_checked_at.
+        """
+        await self.ensure_table()
+        if not await self._config.claim_generation_lock():
+            raise AppException(
+                "A showcase generation/refresh is already in progress. Try again shortly.",
+                status_code=409,
+                code="SHOWCASE_GENERATION_BUSY",
+            )
+        await self._session.commit()
+        try:
+            rows = await self._repo.list_missing_renewal_prices(limit=limit)
+            pairs: list[tuple[Any, dict[str, Any]]] = []
+            skipped_invalid = 0
+            for row in rows:
+                domain = str(row.domain_name or "").strip().lower()
+                name, sep, ext = domain.partition(".")
+                if not sep or not name or not ext:
+                    skipped_invalid += 1
+                    logger.warning(
+                        "showcase.renewal_backfill skipped invalid domain=%r",
+                        row.domain_name,
+                    )
+                    continue
+                pairs.append(
+                    (
+                        row,
+                        {
+                            "domain": domain,
+                            "name": name,
+                            "tld": f".{ext}",
+                            "available": True,
+                            "renewalPrice": None,
+                        },
+                    )
+                )
+
+            await _enrich_renewal_prices([item for _, item in pairs])
+
+            backfilled = 0
+            missing = 0
+            for row, item in pairs:
+                renewal = item.get("renewalPrice")
+                if renewal is None:
+                    missing += 1
+                    continue
+                try:
+                    row.renewal_price_inr = round(float(renewal), 2)
+                except (TypeError, ValueError) as exc:
+                    missing += 1
+                    logger.warning(
+                        "showcase.renewal_backfill invalid_price domain=%s renewal=%r err=%s",
+                        row.domain_name,
+                        renewal,
+                        exc,
+                    )
+                    continue
+                await self._repo.save(row)
+                backfilled += 1
+
+            await self._session.commit()
+            remaining = await self._repo.count_missing_renewal_prices()
+            return {
+                "checked": len(rows),
+                "attempted": len(pairs),
+                "backfilled": backfilled,
+                "missing": missing,
+                "skipped_invalid": skipped_invalid,
+                "remaining_missing": remaining,
+            }
+        finally:
+            try:
+                await self._config.release_generation_lock()
+            except Exception:
+                logger.exception("showcase.renewal_backfill.lock_release_failed")
+
     async def refresh_selected(self) -> dict[str, Any]:
         """Revalidate EVERY selected domain live; never drop selected rows.
 
@@ -1349,6 +1469,8 @@ class ShowcaseDomainService:
                             domain_price_breakdown(unit_price, years=1)["totalInr"]
                         )
                         row.available = True
+                        if row.renewal_price_inr is None:
+                            await _backfill_row_renewal_price(row)
                         refreshed += 1
                 else:
                     try:
