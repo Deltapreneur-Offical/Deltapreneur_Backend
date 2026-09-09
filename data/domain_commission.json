@@ -1,18 +1,18 @@
 {
   "registration": {
-    "default": 0.1,
+    "default": 0.15,
     "by_tld": {}
   },
   "premium_registration": {
-    "default": 0.1,
+    "default": 0.15,
     "by_tld": {}
   },
   "renewal": {
-    "default": 0.03,
+    "default": 0.1,
     "by_tld": {}
   },
   "transfer": {
-    "default": 0.03,
+    "default": 0.15,
     "by_tld": {}
   },
   "email": {
