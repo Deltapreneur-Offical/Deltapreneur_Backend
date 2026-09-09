@@ -546,13 +546,19 @@ async def test_claim_generation_lock_fast_path_visible_lock():
     """Fast-path: when a running generation has COMMITTED its claim, a
     concurrent claim must return False immediately without issuing the
     guarded UPDATE (no 80s row-lock block, instant 409)."""
+    from datetime import datetime, timezone
+
     from app.service.domain.showcase_config_service import ShowcaseConfigService
 
     session = AsyncMock()
     svc = ShowcaseConfigService(session)
     svc._repo.insert_if_absent = AsyncMock()
     svc._repo.get = AsyncMock(
-        return_value='{"generation_lock": true, "enabled": false}'
+        return_value=(
+            '{"generation_lock": true, "enabled": false, "updated_at": "'
+            + datetime.now(timezone.utc).isoformat()
+            + '"}'
+        )
     )
     session.execute = AsyncMock()
 

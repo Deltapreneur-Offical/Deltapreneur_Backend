@@ -179,6 +179,40 @@ class ShowcaseDomainRepository:
         )
         return (await self._session.execute(stmt)).scalars().all()
 
+    async def list_missing_renewal_prices(
+        self,
+        *,
+        limit: int = 200,
+    ) -> Sequence[OpenProviderShowcaseDomain]:
+        """Rows whose stored renewal price is absent/invalid and can be backfilled."""
+        stmt = (
+            select(OpenProviderShowcaseDomain)
+            .where(
+                or_(
+                    OpenProviderShowcaseDomain.renewal_price_inr.is_(None),
+                    OpenProviderShowcaseDomain.renewal_price_inr <= 0,
+                ),
+                self._not_deleted(),
+            )
+            .order_by(OpenProviderShowcaseDomain.domain_name.asc())
+            .limit(max(1, min(int(limit or 200), 500)))
+        )
+        return (await self._session.execute(stmt)).scalars().all()
+
+    async def count_missing_renewal_prices(self) -> int:
+        stmt = (
+            select(func.count())
+            .select_from(OpenProviderShowcaseDomain)
+            .where(
+                or_(
+                    OpenProviderShowcaseDomain.renewal_price_inr.is_(None),
+                    OpenProviderShowcaseDomain.renewal_price_inr <= 0,
+                ),
+                self._not_deleted(),
+            )
+        )
+        return int((await self._session.execute(stmt)).scalar_one())
+
     # ------------------------------------------------------- filter + paginate
 
     @staticmethod

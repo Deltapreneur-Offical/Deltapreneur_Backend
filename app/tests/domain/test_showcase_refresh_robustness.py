@@ -153,6 +153,56 @@ def _patch_registrar(check=None, *, exc: Exception | None = None, quote: dict | 
     )
 
 
+# ------------------------------------------------------------ renewal-only backfill
+
+@pytest.mark.asyncio
+async def test_backfill_missing_renewals_updates_only_renewal_price(monkeypatch):
+    missing = _make_row("alatona.com", price=602952.44, source="afternic")
+    existing = _make_row("kokini.com", price=50000.0, source="afternic")
+    missing.renewal_price_inr = None
+    existing.renewal_price_inr = 1037.79
+    old_create = missing.create_price_inr
+    old_payable = missing.payable_inr
+    old_available = missing.available
+    old_checked = missing.last_checked_at
+    svc = _make_svc([missing, existing])
+    svc._repo.list_missing_renewal_prices = AsyncMock(return_value=[missing])
+    svc._repo.count_missing_renewal_prices = AsyncMock(return_value=0)
+    renew_price = AsyncMock(
+        return_value={"price": {"reseller": {"price": 1041.48, "currency": "INR"}}}
+    )
+    monkeypatch.setattr("app.integrations.openprovider.client.get_domain_price", renew_price)
+
+    result = await svc.backfill_missing_renewal_prices()
+
+    assert result["backfilled"] == 1
+    assert result["missing"] == 0
+    assert missing.renewal_price_inr == 1041.48
+    assert missing.create_price_inr == old_create
+    assert missing.payable_inr == old_payable
+    assert missing.available is old_available
+    assert missing.last_checked_at == old_checked
+    assert existing.renewal_price_inr == 1037.79
+    renew_price.assert_awaited_once_with("alatona", "com", operation="renew", period=1)
+
+
+@pytest.mark.asyncio
+async def test_backfill_missing_renewals_keeps_empty_when_openprovider_omits_price(monkeypatch):
+    row = _make_row("batterify.com", price=306585987.34, source="afternic")
+    row.renewal_price_inr = None
+    svc = _make_svc([row])
+    svc._repo.list_missing_renewal_prices = AsyncMock(return_value=[row])
+    svc._repo.count_missing_renewal_prices = AsyncMock(return_value=1)
+    renew_price = AsyncMock(return_value={"price": {"reseller": {"currency": "INR"}}})
+    monkeypatch.setattr("app.integrations.openprovider.client.get_domain_price", renew_price)
+
+    result = await svc.backfill_missing_renewal_prices()
+
+    assert result["backfilled"] == 0
+    assert result["missing"] == 1
+    assert row.renewal_price_inr is None
+
+
 # ------------------------------------------------------------ 1+2+3: refresh checks all selected
 
 @pytest.mark.asyncio

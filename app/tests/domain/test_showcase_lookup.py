@@ -85,6 +85,10 @@ def _svc(monkeypatch, raw):
         AsyncMock(return_value=raw),
     )
     monkeypatch.setattr(
+        "app.integrations.openprovider.client.get_domain_price",
+        AsyncMock(return_value={"price": {}}),
+    )
+    monkeypatch.setattr(
         "app.integrations.openprovider.client._check_tld_batches",
         AsyncMock(side_effect=AssertionError("batch TLD search must not run")),
     )
@@ -280,6 +284,54 @@ async def test_lookup_uses_customer_price_not_openprovider_base(monkeypatch):
     # or equals it only when the configured premium rate is 0 — never a hardcoded list.
     assert live_price > 0
     assert "providerUnitPriceInr" not in result["live"]
+
+
+@pytest.mark.asyncio
+async def test_lookup_fetches_missing_renewal_from_openprovider_getprice(monkeypatch):
+    raw = {
+        **RAW_FREE_PREMIUM,
+        "domain": "kokini.com",
+        "name": "kokini",
+        "price": {"reseller": {"price": 50000.0, "currency": "INR"}},
+        "premium": {"price": {"create": 50000.0}},
+    }
+    svc = _svc(monkeypatch, raw)
+    saved_id = uuid4()
+
+    async def _upsert(row):
+        row.id = saved_id
+        return row
+
+    svc._repo.upsert_by_domain_name = AsyncMock(side_effect=_upsert)
+    svc._repo.get_by_domain_name = AsyncMock(side_effect=[None, None])
+    renew_quote = {"price": {"reseller": {"price": 1037.79, "currency": "INR"}}}
+    renew_price = AsyncMock(return_value=renew_quote)
+    monkeypatch.setattr("app.integrations.openprovider.client.get_domain_price", renew_price)
+
+    result = await svc.lookup_exact_domain(domain_name="kokini", tld="com")
+
+    renew_price.assert_awaited_once_with("kokini", "com", operation="renew", period=1)
+    assert result["eligible"] is True
+    assert result["live"]["createPriceInr"] and result["live"]["createPriceInr"] > 0
+    assert result["live"]["renewalPriceInr"] == 1037.79
+    assert result["item"]["renewalPriceInr"] == 1037.79
+    assert result["live"]["renewalPriceInr"] != result["live"]["createPriceInr"]
+
+
+@pytest.mark.asyncio
+async def test_lookup_does_not_calculate_renewal_when_openprovider_omits_it(monkeypatch):
+    svc = _svc(monkeypatch, RAW_FREE_PREMIUM)
+    svc._repo.upsert_by_domain_name = AsyncMock(side_effect=lambda row: row)
+    svc._repo.get_by_domain_name = AsyncMock(side_effect=[None, None])
+    renew_price = AsyncMock(return_value={"price": {"reseller": {"currency": "INR"}}})
+    monkeypatch.setattr("app.integrations.openprovider.client.get_domain_price", renew_price)
+
+    result = await svc.lookup_exact_domain(domain_name="shinebyte", tld="com")
+
+    assert result["eligible"] is True
+    assert result["live"]["createPriceInr"] and result["live"]["createPriceInr"] > 0
+    assert result["live"]["renewalPriceInr"] is None
+    assert result["item"]["renewalPriceInr"] is None
 
 
 @pytest.mark.asyncio

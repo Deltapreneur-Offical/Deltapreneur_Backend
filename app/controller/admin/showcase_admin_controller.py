@@ -288,6 +288,17 @@ async def refresh_showcase(
     return {"success": True, **result}
 
 
+@router.post("/renewals/backfill")
+async def backfill_showcase_renewals(
+    limit: int = Query(200, ge=1, le=500),
+    db: AsyncSession = Depends(get_async_db),
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
+) -> dict[str, Any]:
+    svc = ShowcaseDomainService(db)
+    result = await svc.backfill_missing_renewal_prices(limit=limit)
+    return {"success": True, **result}
+
+
 @router.delete("/{row_id}")
 async def remove_domain(
     row_id: uuid.UUID,
