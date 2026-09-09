@@ -88,4 +88,14 @@ BASIC_REQUIRED_FIELDS: list[str] = [
 
 
 def is_profile_complete(community: Community) -> bool:
-    return all(_field_complete(community, field) for field in BASIC_REQUIRED_FIELDS)
+    for field in BASIC_REQUIRED_FIELDS:
+        if field == "linked_in_id":
+            if not (
+                _field_complete(community, "linked_in_id")
+                or _field_complete(community, "linked_in_profile_url")
+            ):
+                return False
+            continue
+        if not _field_complete(community, field):
+            return False
+    return True

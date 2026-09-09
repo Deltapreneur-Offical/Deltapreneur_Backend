@@ -644,6 +644,16 @@ class CommunityService:
         )
 
         if not community:
+            existing = CommunityRepository.find_by_id_any(
+                db=db,
+                community_id=community_id,
+            )
+            if (
+                existing
+                and existing.app_user_id == current_user.id
+                and bool(getattr(existing, "is_deleted", False))
+            ):
+                return
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Creator profile not found",
@@ -664,11 +674,18 @@ class CommunityService:
             .all()
         )
         for auction in auctions:
-            CommunityAuctionRepository.soft_delete(
-                db=db,
-                auction=auction,
-                deleted_by=current_user.id,
-            )
+            try:
+                CommunityAuctionRepository.soft_delete(
+                    db=db,
+                    auction=auction,
+                    deleted_by=current_user.id,
+                )
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Creator auction cleanup failed during profile delete community_id=%s auction_id=%s",
+                    community_id,
+                    getattr(auction, "id", None),
+                )
 
         community.linked_in_id = None
         community.name = None
@@ -680,6 +697,25 @@ class CommunityService:
             community=community,
             deleted_by=current_user.id,
         )
+
+    @staticmethod
+    def delete_my_profile(
+        db: Session,
+        current_user: AppUser,
+    ) -> None:
+        rows = CommunityRepository.find_all_by_app_user_id(
+            db=db,
+            app_user_id=current_user.id,
+        )
+        active_rows = [row for row in rows if not bool(getattr(row, "is_deleted", False))]
+        if not active_rows:
+            return
+        for row in active_rows:
+            CommunityService.delete_profile(
+                db=db,
+                community_id=row.id,
+                current_user=current_user,
+            )
 
     @staticmethod
     def _linkedin_config_ready() -> bool:
