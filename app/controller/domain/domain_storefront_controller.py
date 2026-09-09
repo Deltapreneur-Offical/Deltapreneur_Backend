@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_async_db
 from app.core.dependencies import get_current_user
 from app.entity.user.app_user import AppUser
+from app.service.domain import domain_commission_config as commission
 from app.service.domain.domain_registration_service import DomainRegistrationService
 
 router = APIRouter(prefix="/api/v1/domain/storefront", tags=["Domain Storefront"])
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 async def get_registration_service(
     db: AsyncSession = Depends(get_async_db),
 ) -> DomainRegistrationService:
+    await commission.refresh_from_db(db)
     return DomainRegistrationService(db)
 
 

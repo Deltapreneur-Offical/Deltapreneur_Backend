@@ -980,10 +980,13 @@ class DomainRegistrationService:
         page_size = max(1, min(page_size, 2000))
         chunk_size = max(1, min(int(chunk_size or 12), 60))
 
+        from app.service.domain import domain_commission_config as commission
+
+        cache_namespace = commission.revision()
         cache_key = (
-            f"{label}:{page}"
+            f"{cache_namespace}:{label}:{page}"
             if chunk is None
-            else f"{label}:{page}:c{int(chunk)}:s{chunk_size}"
+            else f"{cache_namespace}:{label}:{page}:c{int(chunk)}:s{chunk_size}"
         )
         cached = _tld_search_cache_get(cache_key)
         if cached is not None:
