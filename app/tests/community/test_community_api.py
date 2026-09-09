@@ -332,4 +332,51 @@ def test_delete_profile_calls_soft_delete():
         _clear_login()
 
 
-        
+def test_delete_my_profile_is_idempotent_when_missing():
+    user = _fake_user()
+    _login_as(user)
+
+    try:
+        with patch(
+            "app.service.community.community_service.CommunityRepository.find_all_by_app_user_id",
+            return_value=[],
+        ):
+            response = client.delete("/api/v1/creator/my")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert body["data"] is None
+
+    finally:
+        _clear_login()
+
+
+def test_delete_my_profile_soft_deletes_active_row():
+    user = _fake_user()
+    community_id = uuid.uuid4()
+    profile = _fake_community(
+        community_id=community_id,
+        app_user_id=user.id,
+    )
+
+    _login_as(user)
+
+    try:
+        with patch(
+            "app.service.community.community_service.CommunityRepository.find_all_by_app_user_id",
+            return_value=[profile],
+        ), patch(
+            "app.service.community.community_service.CommunityRepository.find_by_id",
+            return_value=profile,
+        ), patch(
+            "app.service.community.community_service.CommunityRepository.soft_delete",
+        ) as soft_delete_mock:
+            response = client.delete("/api/v1/creator/my")
+
+        assert response.status_code == 200
+        soft_delete_mock.assert_called_once()
+
+    finally:
+        _clear_login()
+
