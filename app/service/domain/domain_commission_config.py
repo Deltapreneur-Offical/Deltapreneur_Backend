@@ -148,6 +148,11 @@ def _load_legacy_seed() -> dict[str, Any]:
     return deepcopy(_DEFAULTS)
 
 
+# Preserve pre-database startup behavior for background jobs and direct service
+# calls that can run before a request dependency has refreshed from PostgreSQL.
+_runtime_config = _load_legacy_seed()
+
+
 async def refresh_from_db(session: AsyncSession) -> dict[str, Any]:
     """Refresh this worker from the shared config, seeding legacy installs."""
     global _runtime_config

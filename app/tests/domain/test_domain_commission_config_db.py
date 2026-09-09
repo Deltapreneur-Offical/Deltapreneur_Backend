@@ -24,12 +24,15 @@ class FakeSettingsRepository:
 
 @pytest.fixture(autouse=True)
 def fake_repository(monkeypatch):
+    original_runtime_config = commission.load()
     FakeSettingsRepository.values = {}
     monkeypatch.setattr(
         commission,
         "PlatformSettingsRepository",
         FakeSettingsRepository,
     )
+    yield
+    commission._runtime_config = original_runtime_config
 
 
 @pytest.mark.asyncio
