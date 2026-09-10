@@ -83,6 +83,22 @@ class WinnerService:
 
         return await self._mark_payment_pending(auction, winning_bid)
 
+    async def _restore_listing_to_direct_sale(self, domain_id) -> None:
+        """Unsold / cancelled auctions return the listing to its original asking price."""
+        from app.entity.cobranding.domain_listing_entity import DomainListing
+        from app.utils.marketplace_enums import DomainListingStatus, SaleType
+
+        listing_result = await self._session.execute(
+            select(DomainListing).where(DomainListing.id == domain_id)
+        )
+        listing = listing_result.scalar_one_or_none()
+        if listing is None:
+            return
+        if listing.sale_type == SaleType.AUCTION:
+            listing.sale_type = SaleType.ONE_TIME
+        if listing.domain_status != DomainListingStatus.SOLD:
+            listing.domain_status = DomainListingStatus.AVAILABLE
+
     async def select_winner(self, auction_id: uuid.UUID) -> Optional[Bid]:
         """Return the winning bid for an auction (read-only)."""
         return await self._bid_repo.get_highest_bid(auction_id)
@@ -113,6 +129,7 @@ class WinnerService:
     async def _mark_unsold(self, auction: Auction) -> Auction:
         auction.status = AuctionStatus.UNSOLD
         auction.current_winner_id = None
+        await self._restore_listing_to_direct_sale(auction.domain_id)
         await self._session.flush()
         await self._session.commit()
         await self._notify_zero_bid_seller(auction)
