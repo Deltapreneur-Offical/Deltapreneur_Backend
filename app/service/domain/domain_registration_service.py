@@ -1025,37 +1025,7 @@ class DomainRegistrationService:
                 ) from exc
 
             items = [it for it in self._build_tld_items(raw_results, label) if it.get("available")]
-            # Fetch missing renewal prices for premium / high-registration-price domains in this chunk
-            chunk_premium_items = [
-                it for it in items
-                if (it.get("isPremium") or (it.get("registrationPrice") and it.get("registrationPrice") > 2000))
-                and it.get("renewalPrice") is None
-            ]
-            if chunk_premium_items:
-                from app.integrations.openprovider.client import (
-                    get_domain_price,
-                    extract_getprice_renewal_details,
-                )
-                import asyncio
-                async def _fetch_renewal_chunk(item):
-                    try:
-                        ren_quote = await get_domain_price(item["name"], item["tld"].lstrip("."), operation="renew", period=1)
-                        ren_unit, ren_curr = extract_getprice_renewal_details(ren_quote)
-                        if ren_unit and ren_unit > 0:
-                            if ren_curr and ren_curr.upper() != "INR":
-                                from app.service.currency.exchange_rate_service import convert_foreign_to_inr
-                                conv = convert_foreign_to_inr(ren_unit, ren_curr.upper())
-                                renewal_inr = round(float(conv["amountInr"]), 2)
-                            else:
-                                renewal_inr = round(float(ren_unit), 2)
-                            item["renewalPrice"] = renewal_inr
-                            if ren_quote.get("is_premium") or ren_quote.get("isPremium"):
-                                item["isPremium"] = True
-                                item["registryTier"] = "premium"
-                            logger.info("[RENEWAL_FETCH][CHUNK] domain=%s renewal=%s", item["domain"], renewal_inr)
-                    except Exception as exc:
-                        logger.warning("[RENEWAL_FETCH][CHUNK] failed for %s: %s", item["domain"], exc)
-                await asyncio.gather(*[_fetch_renewal_chunk(it) for it in chunk_premium_items])
+            await self._hydrate_missing_tld_prices(items)
             payload = {
                 "label": label,
                 "source": registrar_source(),
@@ -1098,37 +1068,7 @@ class DomainRegistrationService:
 
             # Build items list for first page
             items = [it for it in self._build_tld_items(raw_results, label) if it.get("available")]
-            # Fetch missing renewal prices for premium / high-tier domains on this page
-            premium_items = [
-                it for it in items
-                if (it.get("isPremium") or (it.get("registrationPrice") and it.get("registrationPrice") > 2000))
-                and it.get("renewalPrice") is None
-            ]
-            if premium_items:
-                from app.integrations.openprovider.client import (
-                    get_domain_price,
-                    extract_getprice_renewal_details,
-                )
-                import asyncio
-                async def _fetch_renewal(item):
-                    try:
-                        ren_quote = await get_domain_price(item["name"], item["tld"].lstrip("."), operation="renew", period=1)
-                        ren_unit, ren_curr = extract_getprice_renewal_details(ren_quote)
-                        if ren_unit and ren_unit > 0:
-                            if ren_curr and ren_curr.upper() != "INR":
-                                from app.service.currency.exchange_rate_service import convert_foreign_to_inr
-                                conv = convert_foreign_to_inr(ren_unit, ren_curr.upper())
-                                renewal_inr = round(float(conv["amountInr"]), 2)
-                            else:
-                                renewal_inr = round(float(ren_unit), 2)
-                            item["renewalPrice"] = renewal_inr
-                            if ren_quote.get("is_premium") or ren_quote.get("isPremium"):
-                                item["isPremium"] = True
-                                item["registryTier"] = "premium"
-                            logger.info("[RENEWAL_FETCH][PAGE1] domain=%s renewal=%s isPremium=%s", item["domain"], renewal_inr, item.get("isPremium"))
-                    except Exception as exc:
-                        logger.warning("[RENEWAL_FETCH][PAGE1] failed for %s: %s", item["domain"], exc)
-                await asyncio.gather(*[_fetch_renewal(it) for it in premium_items])
+            await self._hydrate_missing_tld_prices(items)
             payload = {
                 "label": label,
                 "source": registrar_source(),
@@ -1169,36 +1109,7 @@ class DomainRegistrationService:
             elif price is not None and price < 3000:
                 items.append(it)
         # Fetch missing renewal prices for premium / high-tier domains in this page
-        premium_items = [
-            it for it in items
-            if (it.get("isPremium") or (it.get("registrationPrice") and it.get("registrationPrice") > 2000))
-            and it.get("renewalPrice") is None
-        ]
-        if premium_items:
-            from app.integrations.openprovider.client import (
-                get_domain_price,
-                extract_getprice_renewal_details,
-            )
-            import asyncio
-            async def _fetch_renewal(item):
-                try:
-                    ren_quote = await get_domain_price(item["name"], item["tld"].lstrip("."), operation="renew", period=1)
-                    ren_unit, ren_curr = extract_getprice_renewal_details(ren_quote)
-                    if ren_unit and ren_unit > 0:
-                        if ren_curr and ren_curr.upper() != "INR":
-                            from app.service.currency.exchange_rate_service import convert_foreign_to_inr
-                            conv = convert_foreign_to_inr(ren_unit, ren_curr.upper())
-                            renewal_inr = round(float(conv["amountInr"]), 2)
-                        else:
-                            renewal_inr = round(float(ren_unit), 2)
-                        item["renewalPrice"] = renewal_inr
-                        if ren_quote.get("is_premium") or ren_quote.get("isPremium"):
-                            item["isPremium"] = True
-                            item["registryTier"] = "premium"
-                        logger.info("[RENEWAL_FETCH][PAGE2+] domain=%s renewal=%s isPremium=%s", item["domain"], renewal_inr, item.get("isPremium"))
-                except Exception as exc:
-                    logger.warning("[RENEWAL_FETCH][PAGE2+] failed for %s: %s", item["domain"], exc)
-            await asyncio.gather(*[_fetch_renewal(it) for it in premium_items])
+        await self._hydrate_missing_tld_prices(items)
         items.sort(key=lambda x: x.get("registrationPrice") or float("inf"))
 
         payload = {
@@ -1356,6 +1267,94 @@ class DomainRegistrationService:
             })
 
         return items
+
+    @staticmethod
+    async def _hydrate_missing_tld_prices(items: list[dict[str, Any]]) -> None:
+        if not items:
+            return
+
+        from app.integrations.openprovider.client import (
+            extract_create_price_details,
+            extract_getprice_renewal_details,
+            get_domain_price,
+        )
+        from app.service.domain import domain_commission_config as commission
+        from app.service.currency.exchange_rate_service import convert_foreign_to_inr
+
+        async def _hydrate(item: dict[str, Any]) -> None:
+            ext_no_dot = str(item.get("tld") or "").lstrip(".").lower()
+            name = str(item.get("name") or "").strip()
+            if not ext_no_dot or not name:
+                return
+
+            if item.get("registrationPrice") is None:
+                try:
+                    create_quote = await get_domain_price(
+                        name,
+                        ext_no_dot,
+                        operation="create",
+                        period=1,
+                    )
+                    create_unit, create_currency, _source = extract_create_price_details(
+                        create_quote,
+                        source_hint="openprovider_prices",
+                    )
+                    if create_unit and create_unit > 0:
+                        priced = commission.calculate_customer_price(
+                            create_unit,
+                            is_premium=bool(item.get("isPremium")),
+                            service=commission.CommissionService.REGISTRATION,
+                            currency=(create_currency or "INR"),
+                            tld=ext_no_dot,
+                        )
+                        item["registrationPrice"] = float(priced["customerUnitInr"])
+                        item["providerUnitPriceInr"] = float(priced["providerUnitInr"])
+                        item["currency"] = create_currency or item.get("currency")
+                        logger.info(
+                            "[TLD_SEARCH][CREATE_BACKFILL] domain=%s registration=%s",
+                            item.get("domain"),
+                            item["registrationPrice"],
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "[TLD_SEARCH][CREATE_BACKFILL] failed for %s: %s",
+                        item.get("domain"),
+                        exc,
+                    )
+
+            if item.get("renewalPrice") is None:
+                try:
+                    ren_quote = await get_domain_price(
+                        name,
+                        ext_no_dot,
+                        operation="renew",
+                        period=1,
+                    )
+                    ren_unit, ren_curr = extract_getprice_renewal_details(ren_quote)
+                    if ren_unit and ren_unit > 0:
+                        if ren_curr and ren_curr.upper() != "INR":
+                            conv = convert_foreign_to_inr(ren_unit, ren_curr.upper())
+                            renewal_inr = round(float(conv["amountInr"]), 2)
+                        else:
+                            renewal_inr = round(float(ren_unit), 2)
+                        item["renewalPrice"] = renewal_inr
+                        if ren_quote.get("is_premium") or ren_quote.get("isPremium"):
+                            item["isPremium"] = True
+                            item["registryTier"] = "premium"
+                        logger.info(
+                            "[TLD_SEARCH][RENEW_BACKFILL] domain=%s renewal=%s isPremium=%s",
+                            item.get("domain"),
+                            renewal_inr,
+                            item.get("isPremium"),
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "[TLD_SEARCH][RENEW_BACKFILL] failed for %s: %s",
+                        item.get("domain"),
+                        exc,
+                    )
+
+        await asyncio.gather(*[_hydrate(item) for item in items])
 
     async def check_registration_domain(
         self,
