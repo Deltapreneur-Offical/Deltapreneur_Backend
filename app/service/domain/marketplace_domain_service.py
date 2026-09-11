@@ -269,8 +269,10 @@ class MarketplaceDomainService:
         actor: AppUser,
     ) -> None:
         listing = await self.get_listing(listing_id)
+        if listing.is_deleted:
+            raise AppException("Domain listing not found.", status_code=404)
         if listing.listed_by_user_id != actor.id:
-            raise AppException("Not authorized.", status_code=403)
+            raise AppException("Not authorized to delete this listing.", status_code=403)
 
         now = datetime.now(timezone.utc)
         listing.is_deleted = True
