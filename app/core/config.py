@@ -25,12 +25,23 @@ class Settings(BaseSettings):
     # Recycle before typical RDS/NAT idle kills so pooled sockets are not half-open.
     DB_POOL_RECYCLE_SECONDS: int = 90
 
-    # Fail fast instead of hanging 50–150s on dead connections (TCP timeout).
-    DB_CONNECT_TIMEOUT_SECONDS: int = 5
+    # Connection establishment timeout. On the Supabase transaction pooler a
+    # bursty page load fires ~10 concurrent connects; 5s was too tight and some
+    # timed out with asyncio.TimeoutError -> 503. 15s absorbs the burst while
+    # still failing fast on a genuinely dead host.
+    DB_CONNECT_TIMEOUT_SECONDS: int = 15
 
     DB_POOL_TIMEOUT_SECONDS: int = 10
 
     DB_COMMAND_TIMEOUT_SECONDS: int = 30
+
+    # Reuse pooled connections even against the Supabase transaction pooler
+    # (:6543) instead of NullPool. NullPool opened a fresh TCP+TLS connection
+    # per request, so a homepage burst hammered the pooler and intermittently
+    # timed out. A small QueuePool is safe with pgbouncer transaction mode as
+    # long as prepared-statement caching stays disabled (see database.py).
+    # Set to False to fall back to the previous NullPool behaviour.
+    DB_POOLER_REUSE_CONNECTIONS: bool = True
 
     # Disable auction timer + domain retry scheduler (saves DB connections in local dev).
     BACKGROUND_JOBS_ENABLED: bool = True
@@ -64,6 +75,12 @@ class Settings(BaseSettings):
     MAIL_SSL_TLS: bool
 
     MAIL_VALIDATE_CERTS: bool = True
+
+    # SMTP connect/read timeout in seconds. fastapi-mail defaults to 60s, which
+    # made a blocked outbound SMTP port hang the request for a full minute
+    # before failing. Feedback now sends in the background, but a tight timeout
+    # keeps every mail path from pinning a worker on a dead connection.
+    MAIL_TIMEOUT_SECONDS: int = 20
 
     MAIL_FROM_NAME: str
 

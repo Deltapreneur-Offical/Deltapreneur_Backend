@@ -39,3 +39,14 @@ def test_mail_configured_accepts_real_server() -> None:
     )
 
     assert configured.mail_configured() is True
+
+
+def test_mail_timeout_is_short_and_configurable() -> None:
+    # fastapi-mail defaults to 60s; we tighten it so a blocked SMTP port does
+    # not pin a worker for a full minute.
+    assert settings.MAIL_TIMEOUT_SECONDS <= 30
+
+    from app.service.auth.mail_service import MailService
+
+    conf = MailService._conf()
+    assert conf.TIMEOUT == settings.MAIL_TIMEOUT_SECONDS

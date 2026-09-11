@@ -18,6 +18,11 @@ class FeedbackService:
 
     @staticmethod
     async def send_feedback_email(body: FeedbackRequest) -> None:
+        """Send feedback mail, raising AppException(503) on failure.
+
+        Kept for callers that want the send result inline. The HTTP endpoint
+        uses deliver_feedback_email in a background task instead.
+        """
         logger.info("Feedback received subject=%s email=%s", body.subject, body.email)
 
         if not settings.mail_configured():
@@ -39,3 +44,16 @@ class FeedbackService:
             # Never surface SMTP hosts or credentials hints to the browser.
             logger.exception("mail.fail feedback delivery failed: %s", exc)
             raise AppException(_UNDELIVERABLE_MESSAGE, status_code=503) from exc
+
+    @staticmethod
+    async def deliver_feedback_email(body: FeedbackRequest) -> None:
+        """Background-task variant: attempt delivery, never raise.
+
+        Runs after the HTTP response is sent, so a slow or blocked SMTP server
+        does not make the visitor wait. Failures are logged as mail.fail for
+        operators; the endpoint has already acknowledged receipt.
+        """
+        try:
+            await FeedbackService.send_feedback_email(body)
+        except Exception as exc:  # includes AppException from send_feedback_email
+            logger.error("mail.fail feedback background delivery failed: %s", exc)

@@ -87,7 +87,12 @@ def _effective_pool_settings() -> tuple[int, int]:
     max_overflow = settings.DB_MAX_OVERFLOW
     if _uses_supabase_pooler(DATABASE_URL):
         if _supabase_pooler_port(DATABASE_URL) == 6543:
-            # Transaction pooler — NullPool is used; these values are ignored.
+            # Transaction pooler — pgbouncer multiplexes many clients onto few
+            # server connections, so we can hold a wider client-side pool to
+            # absorb a bursty page load (~10 parallel queries) plus background
+            # workers without connecting per request.
+            pool_size = max(pool_size, 10)
+            max_overflow = max(max_overflow, 10)
             return pool_size, max_overflow
         # Session pooler (:5432) — allow modest parallelism (handlers may open sync + async).
         pool_size = min(max(pool_size, 3), 5)
@@ -157,10 +162,27 @@ _sync_engine_kwargs: dict = {
     "connect_args": _sync_connect_args(),
 }
 
+def _transaction_pooler_reuse_enabled() -> bool:
+    """Whether to keep a bounded QueuePool on the Supabase transaction pooler.
+
+    NullPool opened a fresh TCP+TLS connection per request, so a bursty page
+    load hammered the pooler and intermittently timed out. A small QueuePool
+    reuses connections and is safe with pgbouncer transaction mode as long as
+    prepared-statement caching stays disabled (handled in _async_connect_args).
+    """
+    return bool(getattr(settings, "DB_POOLER_REUSE_CONNECTIONS", True))
+
+
 if _uses_supabase_pooler(DATABASE_URL):
     if _supabase_pooler_port(DATABASE_URL) == 6543:
-        # Transaction pooler — open/close per request so parallel HTTP handlers don't queue.
-        _sync_engine_kwargs["poolclass"] = NullPool
+        if _transaction_pooler_reuse_enabled():
+            # Transaction pooler — reuse a small pool instead of connecting per request.
+            _sync_engine_kwargs.update(
+                _queue_pool_kwargs(_sync_pool_size, _sync_max_overflow)
+            )
+        else:
+            # Legacy behaviour — open/close per request.
+            _sync_engine_kwargs["poolclass"] = NullPool
     else:
         # Session pooler (:5432) — keep SQLAlchemy pool tiny to respect session limits.
         _sync_engine_kwargs.update(_queue_pool_kwargs(_sync_pool_size, _sync_max_overflow))
@@ -212,12 +234,21 @@ _async_engine_kwargs: dict = {
 
 if _uses_supabase_pooler(DATABASE_URL):
     if _supabase_pooler_port(DATABASE_URL) == 6543:
-        # Transaction pooler — disable SQLAlchemy pooling; unique prepared statement names.
-        _async_engine_kwargs["poolclass"] = NullPool
+        # Transaction pooler — statement caching MUST stay disabled and prepared
+        # statement names MUST stay unique regardless of pool class, or asyncpg
+        # raises DuplicatePreparedStatementError behind pgbouncer.
         _async_engine_kwargs["connect_args"] = _async_connect_args(
             disable_statement_cache=True,
             unique_prepared_names=True,
         )
+        if _transaction_pooler_reuse_enabled():
+            # Reuse a small bounded pool instead of connecting per request.
+            _async_engine_kwargs.update(
+                _queue_pool_kwargs(_async_pool_size, _async_max_overflow)
+            )
+        else:
+            # Legacy behaviour — no SQLAlchemy pooling.
+            _async_engine_kwargs["poolclass"] = NullPool
     else:
         # Session pooler (:5432) — keep SQLAlchemy pool; disable statement caches only.
         _async_engine_kwargs.update(
