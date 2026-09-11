@@ -182,6 +182,10 @@ async def test_init_whois_email_sends_mail() -> None:
 
     with (
         patch(
+            "app.core.config.Settings.mail_configured",
+            return_value=True,
+        ),
+        patch(
             "app.service.domain.verification_service.lookup_registrant_email",
             new_callable=AsyncMock,
             return_value="admin@novabridge.com",

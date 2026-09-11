@@ -586,11 +586,24 @@ class Settings(BaseSettings):
             return "aws-rds"
         return host
 
+    @staticmethod
+    def _is_placeholder_mail_host(server: str) -> bool:
+        """RFC 2606 reserves example.com for documentation, so it never resolves.
+
+        .env.example ships MAIL_SERVER=smtp.example.com. When that value reaches a
+        real environment the mail block was never filled in, and every send fails
+        with a DNS error instead of being skipped.
+        """
+        host = (server or "").strip().lower().rstrip(".")
+        return host == "example.com" or host.endswith(".example.com")
+
     def mail_configured(self) -> bool:
+        server = (self.MAIL_SERVER or "").strip()
+        if not server or self._is_placeholder_mail_host(server):
+            return False
         return bool(
             (self.MAIL_USERNAME or "").strip()
             and (self.MAIL_PASSWORD or "").strip()
-            and (self.MAIL_SERVER or "").strip()
             and (self.MAIL_FROM or "").strip()
         )
 
