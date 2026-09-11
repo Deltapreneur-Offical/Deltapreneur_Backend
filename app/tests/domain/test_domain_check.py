@@ -551,6 +551,64 @@ async def test_search_tlds_premium_scalar_price_does_not_fallback_to_create_for_
 
 
 @pytest.mark.asyncio
+async def test_search_tlds_backfills_missing_prices_after_priceless_recovery():
+    raw = [
+        {
+            "domain": "swara.bad",
+            "name": "swara",
+            "extension": "bad",
+            "status": "free",
+        },
+    ]
+    create_quote = {
+        "price": {
+            "reseller": {"price": 1234.0, "currency": "INR"},
+        },
+        "is_premium": False,
+    }
+    renew_quote = {
+        "price": {
+            "reseller": {"price": 432.1, "currency": "INR"},
+        },
+        "is_premium": False,
+    }
+
+    from app.service.domain import domain_registration_service as drs
+    drs._tld_search_cache.clear()
+
+    with (
+        patch(
+            "app.integrations.openprovider.client.search_domains_label_first_page",
+            new_callable=AsyncMock,
+            return_value=(raw, False, None),
+        ),
+        patch(
+            "app.integrations.openprovider.client.get_domain_price",
+            new_callable=AsyncMock,
+            side_effect=[create_quote, renew_quote],
+        ),
+        patch(
+            "app.service.domain.domain_commission_config.get_rate",
+            return_value=0.0,
+        ),
+    ):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(
+                "/api/v1/domain/search-tlds", params={"name": "swara"}
+            )
+
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert len(items) == 1
+    item = items[0]
+    assert item["tld"] == ".bad"
+    assert item["registrationPrice"] == 1234.0
+    assert item["providerUnitPriceInr"] == 1234.0
+    assert item["renewalPrice"] == 432.1
+
+
+@pytest.mark.asyncio
 async def test_search_tlds_uses_reseller_price_when_panel_factor_disabled():
     """With OPENPROVIDER_PANEL_INR_FACTOR <= 1.0 (default), the extensions list
     must show the raw OpenProvider reseller INR — same as the exact-match card —
