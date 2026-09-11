@@ -16,7 +16,11 @@ from app.entity.user.app_user import AppUser
 from app.entity.analytics.venture_view import VentureView
 
 from app.core.config import settings
-from app.core.database import Base, DATABASE_URL as NORMALIZED_DATABASE_URL
+from app.core.database import (
+    Base,
+    DATABASE_URL as NORMALIZED_DATABASE_URL,
+    _normalize_supabase_pooler_url,
+)
 
 # User module
 from app.entity.user.app_user import AppUser            # noqa: F401
@@ -98,11 +102,9 @@ def _to_sync_url(url: str) -> str:
 def _migration_database_url() -> str:
     """Prefer DATABASE_URL from the environment (supports test DB overrides)."""
     raw = os.getenv("DATABASE_URL") or NORMALIZED_DATABASE_URL
+    raw = _normalize_supabase_pooler_url(raw)
     if raw.startswith("postgresql+asyncpg://"):
         raw = raw.replace("postgresql+asyncpg://", "postgresql://", 1)
-    # Reuse app pooler normalization (session :5432, not transaction :6543).
-    if "pooler.supabase.com" in raw and ":6543" in raw:
-        raw = raw.replace(":6543", ":5432", 1)
     return _to_sync_url(raw)
 
 

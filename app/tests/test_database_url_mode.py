@@ -2,6 +2,7 @@ from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
 from app.core.database import (
+    _normalize_supabase_pooler_url,
     _async_connect_args,
     _queue_pool_kwargs,
     _sync_connect_args,
@@ -24,6 +25,20 @@ def test_async_urls_use_asyncpg_for_async_sessions() -> None:
 
     assert _to_sync_url(sync_url) == sync_url
     assert _to_async_url(sync_url) == "postgresql+asyncpg://user:pass@localhost:5432/app"
+
+
+def test_supabase_session_pooler_urls_are_normalized_to_transaction_mode() -> None:
+    raw = "postgresql://user:pass@aws-0-ap-northeast-2.pooler.supabase.com:5432/postgres"
+
+    assert _normalize_supabase_pooler_url(raw) == (
+        "postgresql://user:pass@aws-0-ap-northeast-2.pooler.supabase.com:6543/postgres"
+    )
+
+
+def test_supabase_transaction_pooler_urls_are_left_unchanged() -> None:
+    raw = "postgresql://user:pass@aws-0-ap-northeast-2.pooler.supabase.com:6543/postgres"
+
+    assert _normalize_supabase_pooler_url(raw) == raw
 
 
 def test_db_timeout_and_recycle_settings() -> None:

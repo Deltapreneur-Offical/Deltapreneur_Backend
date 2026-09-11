@@ -1,5 +1,5 @@
 from typing import AsyncGenerator
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse, urlunparse
 from uuid import uuid4
 
 from sqlalchemy import create_engine
@@ -33,10 +33,52 @@ def _supabase_pooler_port(url: str) -> int | None:
     return None
 
 
-# Respect DATABASE_URL as configured.
-# Supabase pooler (:5432 session / :6543 transaction) uses special pool settings below.
+def _normalize_supabase_pooler_url(url: str) -> str:
+    """Prefer Supabase transaction pooler (:6543) over session mode (:5432).
+
+    Render deploys can briefly overlap old/new instances plus migrations, and
+    the session pooler has a strict client cap. Transaction mode combined with
+    ``NullPool`` keeps the app and Alembic from pinning scarce sessions.
+    """
+    raw = (url or "").strip()
+    if not raw:
+        return raw
+
+    try:
+        parsed = urlparse(raw)
+        host = (parsed.hostname or "").lower()
+        port = parsed.port or 5432
+    except Exception:
+        return raw
+
+    if "pooler.supabase.com" not in host or port != 5432:
+        return raw
+
+    auth = ""
+    if parsed.username:
+        auth = quote(parsed.username, safe="")
+        if parsed.password is not None:
+            auth = f"{auth}:{quote(parsed.password, safe='')}"
+        auth = f"{auth}@"
+
+    netloc = f"{auth}{parsed.hostname}:6543"
+    return urlunparse(
+        (
+            parsed.scheme,
+            netloc,
+            parsed.path,
+            parsed.params,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
+
+
+# Respect DATABASE_URL, but normalize Supabase pooler URLs to the safer
+# transaction mode when they target the pooled host on :5432.
+# AWS RDS and other Postgres hosts use the URL unchanged.
 # AWS RDS and other Postgres hosts use normal SQLAlchemy pooling (DB_POOL_SIZE / DB_MAX_OVERFLOW).
-DATABASE_URL = settings.resolved_database_url()
+DATABASE_URL = _normalize_supabase_pooler_url(settings.resolved_database_url())
 
 
 def _effective_pool_settings() -> tuple[int, int]:
