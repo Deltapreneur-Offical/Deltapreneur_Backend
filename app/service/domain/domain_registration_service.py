@@ -43,7 +43,12 @@ from app.service.domain.provider_domain_correlation import (
     decide_provider_link,
     email_from_customer_payload,
 )
-from app.utils.domain_gst import domain_price_breakdown, gst_settings_for_client, order_gst_payload
+from app.utils.domain_gst import (
+    domain_price_breakdown,
+    gst_inclusive_total_inr,
+    gst_settings_for_client,
+    order_gst_payload,
+)
 from app.utils.domain_label import compose_search_fqdn, sanitize_sld
 from app.utils.domain_nameservers import parse_order_nameservers, set_order_nameservers
 from app.utils.registration_enums import RegistrationOrderStatus
@@ -236,6 +241,56 @@ async def _warm_tld_min_period(reg: Any, extension_no_dot: str) -> None:
 
 def registrar_source() -> str:
     return settings.domain_registrar()
+
+
+def _renewal_customer_pricing(
+    wholesale_inr: float | None,
+    tld: str,
+) -> tuple[float | None, float | None]:
+    """Commission-inclusive ex-GST renewal unit and GST-inclusive display total.
+
+    ``wholesale_inr`` must already be INR (FX applied). Cart/checkout still
+    quote renewals live; this is the card \"Renews at\" amount.
+    """
+    if wholesale_inr is None:
+        return None, None
+    try:
+        amount = float(wholesale_inr)
+    except (TypeError, ValueError):
+        return None, None
+    if amount <= 0:
+        return None, None
+    from app.service.domain import domain_commission_config as commission
+
+    priced = commission.calculate_customer_price(
+        amount,
+        is_premium=False,
+        service=commission.CommissionService.RENEWAL,
+        currency="INR",
+        tld=str(tld or "").lstrip("."),
+    )
+    unit = float(priced["customerUnitInr"])
+    return unit, gst_inclusive_total_inr(unit)
+
+
+def _attach_tld_item_gst_fields(item: dict[str, Any]) -> None:
+    """Add GST-inclusive display totals without mutating ex-GST selling units."""
+    registration = item.get("registrationPrice")
+    if registration is not None:
+        try:
+            unit = float(registration)
+        except (TypeError, ValueError):
+            unit = 0.0
+        if unit > 0:
+            breakdown = domain_price_breakdown(unit, years=1)
+            item["totalInr"] = breakdown["totalInr"]
+            item["gstInr"] = breakdown["gstInr"]
+            item["gstRate"] = breakdown["gstRate"]
+            item["gstEnabled"] = breakdown["gstEnabled"]
+    wholesale_renew = item.get("renewalPrice")
+    tld = str(item.get("tld") or "").lstrip(".")
+    _unit, renewal_total = _renewal_customer_pricing(wholesale_renew, tld)
+    item["renewalTotalInr"] = renewal_total
 
 
 def _registration_pricing_fields(unit_inr: float, years: int = 1) -> dict[str, Any]:
@@ -653,6 +708,10 @@ class DomainRegistrationService:
                 "commissionRate": commission.get_rate("renewal"),
                 "unitInr": cheapest_ren_final,
                 "byTld": ren_by_tld_final,
+                "byTldInclusive": {
+                    tld: gst_inclusive_total_inr(amount)
+                    for tld, amount in ren_by_tld_final.items()
+                },
                 "byTldDetailed": ren_by_tld_detailed,
                 "label": f"From ₹{int(cheapest_ren_final)} / yr",
             },
@@ -669,6 +728,10 @@ class DomainRegistrationService:
                 "commissionRate": commission.get_rate("registration"),
                 "unitInr": cheapest_reg_final,
                 "byTld": reg_by_tld_final,
+                "byTldInclusive": {
+                    tld: gst_inclusive_total_inr(amount)
+                    for tld, amount in reg_by_tld_final.items()
+                },
                 "byTldDetailed": reg_by_tld_detailed,
                 "label": f"From ₹{int(cheapest_reg_final)} / yr",
             },
@@ -922,6 +985,8 @@ class DomainRegistrationService:
             full_domain, renewal_inr,
         )
 
+        _renewal_unit, renewal_total = _renewal_customer_pricing(renewal_inr, ext_no_dot)
+
         return DomainCheckResponse(
             status="available",
             domain=full_domain,
@@ -934,6 +999,7 @@ class DomainRegistrationService:
             whoisPrivacyAllowed=whois_allowed,
             renewalPrice=renewal_inr,
             renewalPriceInr=renewal_inr,
+            renewalTotalInr=renewal_total,
             # Storefront always exposes the 1-year customer price.
             **_registration_pricing_fields(unit_inr, 1),
             **registrar_meta,
@@ -1250,7 +1316,7 @@ class DomainRegistrationService:
                 else:
                     renewal_inr = round(float(renew_raw), 2)
 
-            items.append({
+            item = {
                 "domain": fqdn or f"{name}.{ext_lc}",
                 "name": name,
                 "tld": f".{ext_lc}",
@@ -1264,7 +1330,9 @@ class DomainRegistrationService:
                 "currency": currency,
                 "minPeriodYears": tld_min_registration_years(ext_lc),
                 "source": registrar_source(),
-            })
+            }
+            _attach_tld_item_gst_fields(item)
+            items.append(item)
 
         return items
 
@@ -1353,6 +1421,7 @@ class DomainRegistrationService:
                         item.get("domain"),
                         exc,
                     )
+            _attach_tld_item_gst_fields(item)
 
         await asyncio.gather(*[_hydrate(item) for item in items])
 
@@ -1443,6 +1512,8 @@ class DomainRegistrationService:
                 except Exception as exc:
                     logger.warning("[RENEWAL_FETCH][PREMIUM_MARKETPLACE] failed for %s: %s", item["domain"], exc)
             await asyncio.gather(*[_fetch_renewal(it) for it in premium_items])
+            for it in premium_items:
+                _attach_tld_item_gst_fields(it)
 
         items.sort(key=lambda x: x.get("registrationPrice") or float("inf"))
         logger.info(

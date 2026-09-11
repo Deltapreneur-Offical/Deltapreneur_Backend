@@ -69,5 +69,9 @@ class DomainCheckResponse(BaseModel):
     )
     renewalPriceInr: Optional[float] = Field(
         default=None,
-        description="Per-year renewal price in INR including customer commission",
+        description="Per-year wholesale renewal price in INR (FX only; tests and cart keep this)",
+    )
+    renewalTotalInr: Optional[float] = Field(
+        default=None,
+        description="Customer-facing 1-year renewal total in INR (commission + GST)",
     )

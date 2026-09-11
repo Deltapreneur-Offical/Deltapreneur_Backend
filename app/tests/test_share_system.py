@@ -265,6 +265,7 @@ async def test_preview_payload_is_sanitized(mock_reg_service):
     assert avail["price_inr"] == 1151.82
     assert avail["total_inr"] == 1359.15
     assert avail["renewal_price_inr"] == 1151.82
+    assert avail["renewal_total_inr"] is None
     assert avail["currency"] == "INR"
     assert payload["domain"] == "tidebrew.com"
     assert payload["original_query"] == "a coffee shop near beach"

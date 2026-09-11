@@ -198,6 +198,7 @@ class ShareService:
             "price_inr": None,
             "total_inr": None,
             "renewal_price_inr": None,
+            "renewal_total_inr": None,
             "min_period_years": None,
             "currency": "INR",
             "checked_at": None,
@@ -224,6 +225,11 @@ class ShareService:
                     "renewal_price_inr": (
                         round(float(check.renewalPriceInr), 2)
                         if check.renewalPriceInr is not None
+                        else None
+                    ),
+                    "renewal_total_inr": (
+                        round(float(check.renewalTotalInr), 2)
+                        if check.renewalTotalInr is not None
                         else None
                     ),
                     "min_period_years": check.minPeriodYears,
@@ -263,6 +269,8 @@ class ShareService:
                                 availability["total_inr"] = round(float(probe.totalInr), 2)
                             if probe.renewalPriceInr is not None:
                                 availability["renewal_price_inr"] = round(float(probe.renewalPriceInr), 2)
+                            if probe.renewalTotalInr is not None:
+                                availability["renewal_total_inr"] = round(float(probe.renewalTotalInr), 2)
                             if probe.minPeriodYears is not None:
                                 availability["min_period_years"] = probe.minPeriodYears
                             logger.info(
@@ -339,6 +347,9 @@ class ShareService:
             is_premium = bool(availability.get("is_premium"))
             status = availability.get("status", "available")
             price_inr = availability.get("price_inr")
+            display_inr = availability.get("total_inr")
+            if display_inr is None:
+                display_inr = price_inr
             meta["is_premium"] = is_premium
             meta["status"] = status
             meta["price_inr"] = price_inr
@@ -363,8 +374,8 @@ class ShareService:
                 state_parts.append("Available")
             elif status == "taken":
                 state_parts.append("Currently unavailable")
-            if price_inr is not None and price_inr > 0:
-                formatted = f"₹{price_inr:,.2f}"
+            if display_inr is not None and display_inr > 0:
+                formatted = f"₹{display_inr:,.2f}"
                 state_parts.append(f"{formatted}/yr" if not is_premium else f"{formatted} (1st Year)")
 
             description = " • ".join(state_parts)
