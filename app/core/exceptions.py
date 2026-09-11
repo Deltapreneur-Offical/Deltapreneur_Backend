@@ -15,8 +15,8 @@ from app.service.auth.auth_exceptions import (
 logger = logging.getLogger(__name__)
 
 _DB_UNAVAILABLE_MESSAGE = (
-    "Database is unavailable. For local development, ensure DATABASE_URL_DIRECT is reachable "
-    "or run .\\run_rds_tunnel.ps1 then restart .\\run_dev.ps1 (or use .\\run_local.ps1)."
+    "Database is unavailable. Start the Deltapreneur backend and confirm "
+    "DATABASE_URL in Deltapreneur_Backend/.env is reachable."
 )
 
 

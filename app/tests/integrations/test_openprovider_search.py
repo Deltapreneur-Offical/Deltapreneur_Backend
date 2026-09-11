@@ -188,3 +188,91 @@ async def test_check_domain_raw_rejects_access_denied_body_without_crashing(monk
     with pytest.raises(RuntimeError) as exc:
         await op_client._check_domain_raw("ventorly", "com")
     assert "10005" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_check_tld_batches_recovers_poisoned_single_tld_via_priceless_fallback(monkeypatch):
+    monkeypatch.setattr(
+        op_client, "_auth_headers", AsyncMock(return_value={"Authorization": "Bearer test"})
+    )
+    monkeypatch.setattr(op_client, "_base_url", lambda: "https://registrar.test")
+
+    posted_payloads: list[dict] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int, body: dict, text: str = "") -> None:
+            self.status_code = status_code
+            self._body = body
+            self.text = text or str(body)
+
+        def json(self) -> dict:
+            return self._body
+
+    class FakeClient:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc_info) -> None:
+            return None
+
+        async def post(self, _url: str, *, headers: dict, json: dict):
+            assert headers == {"Authorization": "Bearer test"}
+            posted_payloads.append(json)
+            exts = tuple(item["extension"] for item in json["domains"])
+            with_price = bool(json.get("with_price"))
+
+            if with_price and exts == ("good", "bad"):
+                return FakeResponse(500, {"code": 701, "desc": "poison batch"})
+            if with_price and exts == ("good",):
+                return FakeResponse(
+                    200,
+                    {
+                        "code": 0,
+                        "data": {
+                            "results": [
+                                {
+                                    "domain": "brand.good",
+                                    "name": "brand",
+                                    "extension": "good",
+                                    "status": "free",
+                                    "price": {"reseller": {"price": 500, "currency": "INR"}},
+                                }
+                            ]
+                        },
+                    },
+                )
+            if with_price and exts == ("bad",):
+                return FakeResponse(500, {"code": 701, "desc": "single poison"})
+            if not with_price and exts == ("bad",):
+                return FakeResponse(
+                    200,
+                    {
+                        "code": 0,
+                        "data": {
+                            "results": [
+                                {
+                                    "domain": "brand.bad",
+                                    "name": "brand",
+                                    "extension": "bad",
+                                    "status": "free",
+                                }
+                            ]
+                        },
+                    },
+                )
+
+            raise AssertionError(f"Unexpected payload: {json}")
+
+    monkeypatch.setattr(op_client.httpx, "AsyncClient", FakeClient)
+
+    results = await op_client._check_tld_batches("brand", ["good", "bad"])
+
+    assert {item["extension"] for item in results} == {"good", "bad"}
+    assert any(
+        payload.get("with_price") is False
+        and tuple(item["extension"] for item in payload["domains"]) == ("bad",)
+        for payload in posted_payloads
+    )

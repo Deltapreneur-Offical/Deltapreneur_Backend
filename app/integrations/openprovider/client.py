@@ -2089,7 +2089,12 @@ async def _check_tld_batches(
         label, len(tlds_to_check), BATCH, total_batches, CONCURRENCY, provider or "registry",
     )
 
-    async def _check_chunk(chunk: list[str], idx: int) -> list[dict[str, Any]]:
+    async def _check_chunk(
+        chunk: list[str],
+        idx: int,
+        *,
+        with_price: bool = True,
+    ) -> list[dict[str, Any]]:
         domains_payload = [{"name": label, "extension": tld} for tld in chunk]
         tld_start = (idx * BATCH) + 1
         tld_end = tld_start + len(chunk) - 1
@@ -2106,7 +2111,7 @@ async def _check_tld_batches(
         last_err: Exception | None = None
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                payload: dict[str, Any] = {"domains": domains_payload, "with_price": True}
+                payload: dict[str, Any] = {"domains": domains_payload, "with_price": with_price}
                 if provider:
                     payload["provider"] = provider
                 resp = await client.post(
@@ -2217,9 +2222,26 @@ async def _check_tld_batches(
         except _PoisonBatchError as exc:
             bad_chunk = exc.chunk
             if len(bad_chunk) <= 1:
+                lone_tld = bad_chunk[0]
+                try:
+                    fallback = await _check_chunk(bad_chunk, idx, with_price=False)
+                    if fallback:
+                        logger.warning(
+                            "[OPENPROVIDER_SEARCH] Recovered poisoned TLD %s for %s via price-less fallback",
+                            lone_tld,
+                            label,
+                        )
+                        return fallback
+                except Exception as fallback_exc:
+                    logger.warning(
+                        "[OPENPROVIDER_SEARCH] Price-less fallback failed for TLD %s on %s: %s",
+                        lone_tld,
+                        label,
+                        fallback_exc,
+                    )
                 logger.warning(
                     "[OPENPROVIDER_SEARCH] Dropping unpriceable TLD %s for %s",
-                    bad_chunk[0], label,
+                    lone_tld, label,
                 )
                 return []
             mid = len(bad_chunk) // 2
@@ -2374,11 +2396,16 @@ async def _check_labels_batch(
             super().__init__(message)
             self.chunk = chunk
 
-    async def _check_chunk(chunk: list[dict[str, str]], idx: int) -> list[dict[str, Any]]:
+    async def _check_chunk(
+        chunk: list[dict[str, str]],
+        idx: int,
+        *,
+        with_price: bool = True,
+    ) -> list[dict[str, Any]]:
         last_err: Exception | None = None
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                payload: dict[str, Any] = {"domains": chunk, "with_price": True}
+                payload: dict[str, Any] = {"domains": chunk, "with_price": with_price}
                 if provider:
                     payload["provider"] = provider
                 resp = await client.post(
@@ -2478,9 +2505,24 @@ async def _check_labels_batch(
         except _PoisonBatchError as exc:
             bad_chunk = exc.chunk
             if len(bad_chunk) <= 1:
+                lone_pair = bad_chunk[0]
+                try:
+                    fallback = await _check_chunk(bad_chunk, idx, with_price=False)
+                    if fallback:
+                        logger.warning(
+                            "[OPENPROVIDER_SEARCH] Recovered poisoned label/TLD pair %s via price-less fallback",
+                            lone_pair,
+                        )
+                        return fallback
+                except Exception as fallback_exc:
+                    logger.warning(
+                        "[OPENPROVIDER_SEARCH] Price-less fallback failed for label/TLD pair %s: %s",
+                        lone_pair,
+                        fallback_exc,
+                    )
                 logger.warning(
                     "[OPENPROVIDER_SEARCH] Dropping unpriceable label/TLD pair %s",
-                    bad_chunk[0],
+                    lone_pair,
                 )
                 return []
             mid = len(bad_chunk) // 2

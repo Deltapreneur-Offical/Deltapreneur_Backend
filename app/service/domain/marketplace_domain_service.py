@@ -5,10 +5,12 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppException
+from app.entity.auction.auction_entity import Auction
 from app.entity.cobranding.domain_listing_entity import DomainListing
 from app.entity.coventure.agreement_entity import Agreement
 from app.entity.coventure.contact_info_entity import ContactInfo
@@ -20,7 +22,8 @@ from app.model.marketplace.domain_listing_request import (
 from app.model.venture.venture_request import ContactInfoRequest
 from app.repository.domain_listing_repository import DomainListingRepository
 from app.service.platform.listing_pricing_service import ListingPricingService
-from app.utils.marketplace_enums import SaleType
+from app.utils.enums import AuctionStatus
+from app.utils.marketplace_enums import DomainListingStatus, SaleType
 from app.service.marketplace.listing_view_counter import record_domain_listing_view
 from app.utils.pagination import offset_limit
 
@@ -60,7 +63,42 @@ class MarketplaceDomainService:
         return list(await self._repo.search_active_non_auction(query))
 
     async def list_my_listings(self, user: AppUser) -> list[DomainListing]:
-        return list(await self._repo.list_by_lister(user.id))
+        listings = list(await self._repo.list_by_lister(user.id))
+        await self._restore_unsold_auction_listings(listings)
+        return listings
+
+    async def _restore_unsold_auction_listings(self, listings: list[DomainListing]) -> None:
+        """Heal listings still marked AUCTION after a no-bid / cancelled sale."""
+        stale = [
+            listing for listing in listings
+            if listing.sale_type == SaleType.AUCTION
+            and listing.domain_status != DomainListingStatus.SOLD
+        ]
+        if not stale:
+            return
+        restored = False
+        no_sale = {
+            AuctionStatus.UNSOLD,
+            AuctionStatus.CANCELLED,
+            AuctionStatus.CLOSED,
+            AuctionStatus.TAKEN_DOWN,
+        }
+        for listing in stale:
+            result = await self._session.execute(
+                select(Auction)
+                .where(Auction.domain_id == listing.id, Auction.is_deleted.is_(False))
+                .order_by(Auction.created_at.desc())
+                .limit(1)
+            )
+            latest = result.scalar_one_or_none()
+            if latest is None or latest.status not in no_sale:
+                continue
+            listing.sale_type = SaleType.ONE_TIME
+            listing.domain_status = DomainListingStatus.AVAILABLE
+            restored = True
+        if restored:
+            await self._session.commit()
+
 
     async def list_my_purchases(self, user: AppUser) -> list[DomainListing]:
         return list(await self._repo.list_by_buyer(user.id))
@@ -231,8 +269,10 @@ class MarketplaceDomainService:
         actor: AppUser,
     ) -> None:
         listing = await self.get_listing(listing_id)
+        if listing.is_deleted:
+            raise AppException("Domain listing not found.", status_code=404)
         if listing.listed_by_user_id != actor.id:
-            raise AppException("Not authorized.", status_code=403)
+            raise AppException("Not authorized to delete this listing.", status_code=403)
 
         now = datetime.now(timezone.utc)
         listing.is_deleted = True

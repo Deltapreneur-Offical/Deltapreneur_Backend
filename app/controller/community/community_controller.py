@@ -121,6 +121,23 @@ def get_my_profile(
     )
 
 
+@router.delete("/my", response_model=ApiResponse)
+def delete_my_profile(
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+):
+    CommunityService.delete_my_profile(
+        db=db,
+        current_user=current_user,
+    )
+
+    return ApiResponse(
+        success=True,
+        message="Creator profile deleted successfully",
+        data=None,
+    )
+
+
 @router.get("/linkedin/auth")
 def linkedin_auth_url(
     request: Request,

@@ -276,7 +276,7 @@ async def test_generate_aftermarket_happy_path_persists_source():
     assert len(persisted) == 1
     assert persisted[0].source == "afternic"
     assert persisted[0].is_selected is False
-    assert persisted[0].create_price_inr == pytest.approx(660000.0)  # 600k × 1.1 margin
+    assert persisted[0].create_price_inr == pytest.approx(690000.0)  # 600k × 1.15 margin
 
 
 async def test_generate_aftermarket_below_threshold_now_accepted():

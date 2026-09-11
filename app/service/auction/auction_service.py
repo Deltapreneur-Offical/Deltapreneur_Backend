@@ -514,6 +514,10 @@ class AuctionService:
             updated = await self._repo.close_auction(
                 auction_id, final_status=AuctionStatus.CANCELLED
             )
+            listing = await self._listing_repo.get_by_id(updated.domain_id)
+            if listing is not None and listing.sale_type == SaleType.AUCTION:
+                listing.sale_type = SaleType.ONE_TIME
+                await self._listing_repo.save(listing)
             await self._session.commit()
             logger.info("auction.cancelled id=%s by=%s", auction_id, actor.id)
             return updated  # type: ignore[return-value]

@@ -46,6 +46,7 @@ from app.model.common.payment_request import RazorpayVerifyRequest
 from app.integrations.s3.upload_service import upload_image
 from app.integrations.s3.media_helpers import client_media_urls
 from app.model.domain.domain_check_response import DomainCheckResponse
+from app.service.domain import domain_commission_config as commission
 
 router = APIRouter(prefix="/api/v1/domain", tags=["Domains"])
 logger = logging.getLogger(__name__)
@@ -113,6 +114,7 @@ async def get_marketplace_payment_service(
 async def get_registration_service(
     db: AsyncSession = Depends(get_async_db),
 ) -> DomainRegistrationService:
+    await commission.refresh_from_db(db)
     return DomainRegistrationService(db)
 
 
