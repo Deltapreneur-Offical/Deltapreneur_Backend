@@ -25,9 +25,12 @@ def _post_feedback():
 
 
 def test_unhandled_error_response_keeps_cors_headers() -> None:
+    # Force a genuinely unhandled error inside the request (not the backgrounded
+    # mail send, which is deliberately swallowed) to prove a 500 still carries
+    # CORS headers via UnhandledExceptionMiddleware.
     with patch(
-        "app.controller.feedback.feedback_controller.FeedbackService.send_feedback_email",
-        new=AsyncMock(side_effect=RuntimeError("smtp exploded")),
+        "app.controller.feedback.feedback_controller.enforce_bot_protection",
+        new=AsyncMock(side_effect=RuntimeError("boom inside request")),
     ):
         response = _post_feedback()
 
@@ -37,13 +40,13 @@ def test_unhandled_error_response_keeps_cors_headers() -> None:
 
 
 def test_successful_response_keeps_cors_headers() -> None:
-    with patch(
-        "app.controller.feedback.feedback_controller.FeedbackService.send_feedback_email",
+    with patch("app.core.config.Settings.mail_configured", return_value=True), patch(
+        "app.controller.feedback.feedback_controller.FeedbackService.deliver_feedback_email",
         new=AsyncMock(return_value=None),
     ):
         response = _post_feedback()
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     assert response.headers.get("access-control-allow-origin") == BROWSER_ORIGIN
 
 
