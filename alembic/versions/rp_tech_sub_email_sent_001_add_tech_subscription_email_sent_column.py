@@ -1,16 +1,11 @@
 """add_tech_subscription_email_sent_column
 
 Revision ID: rp_tech_sub_email_sent_001
-Revises: tech_access_email_sent_001
+Revises: rp_seed_provider_keys_001
 Create Date: 2026-08-13 12:20:00.000000
 
 Add email_sent tracking column to technology_subscriptions for
 idempotent technology purchase notification emails.
-
-This migration intentionally chains after the legacy
-``tech_access_email_sent_001`` revision so deployments that already stamped the
-old revision id can continue upgrading. The upgrade/downgrade logic is guarded
-to stay safe on both histories.
 """
 from typing import Sequence, Union
 
@@ -20,7 +15,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = "rp_tech_sub_email_sent_001"
-down_revision: Union[str, Sequence[str], None] = "tech_access_email_sent_001"
+down_revision: Union[str, Sequence[str], None] = "rp_seed_provider_keys_001"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
