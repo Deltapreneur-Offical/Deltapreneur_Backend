@@ -6,6 +6,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from app.bootstrap import configure_middleware, register_routers
 from app.core.bot_middleware import BotGuardMiddleware
 from app.core.config import settings
+from app.core.error_middleware import UnhandledExceptionMiddleware
 from app.core.rate_limiter import limiter
 from app.core.request_middleware import RequestContextMiddleware
 
@@ -26,10 +27,13 @@ def test_configure_middleware_registers_the_expected_stack(monkeypatch) -> None:
     configure_middleware(app)
 
     assert app.state.limiter is limiter
+    # Outermost first. UnhandledExceptionMiddleware must stay inside CORSMiddleware
+    # so 500s it renders still receive Access-Control-Allow-Origin.
     assert [mw.cls for mw in app.user_middleware] == [
         GZipMiddleware,
         RequestContextMiddleware,
         CORSMiddleware,
+        UnhandledExceptionMiddleware,
         BotGuardMiddleware,
         SlowAPIMiddleware,
     ]

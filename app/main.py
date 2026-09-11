@@ -167,6 +167,18 @@ elif settings.ENVIRONMENT == "production":
         "CORS_ALLOW_ORIGINS is empty in production."
     )
 
+if settings.mail_configured():
+    logger.info(
+        "Mail enabled server=%s port=%s",
+        settings.MAIL_SERVER,
+        settings.MAIL_PORT,
+    )
+else:
+    logger.warning(
+        "Mail is NOT configured (MAIL_SERVER=%r) — all outbound email is disabled.",
+        settings.MAIL_SERVER,
+    )
+
 # -------------------------------------------------------------------
 # Exception Handlers
 # -------------------------------------------------------------------

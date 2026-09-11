@@ -158,6 +158,7 @@ from app.controller.virtual_assistant.virtual_assistant_workspace_controller imp
 )
 from app.core.bot_middleware import BotGuardMiddleware
 from app.core.config import settings
+from app.core.error_middleware import UnhandledExceptionMiddleware
 from app.core.rate_limiter import limiter
 from app.core.request_middleware import RequestContextMiddleware
 from app.routes.ai_domains import (
@@ -182,6 +183,12 @@ def configure_middleware(app: FastAPI) -> None:
     )
     app.add_middleware(
         BotGuardMiddleware,
+    )
+
+    # Added before CORSMiddleware so it nests inside it: 500s rendered here still
+    # get Access-Control-Allow-Origin, instead of surfacing as browser CORS errors.
+    app.add_middleware(
+        UnhandledExceptionMiddleware,
     )
 
     cors_origins = settings.resolved_cors_origins()
