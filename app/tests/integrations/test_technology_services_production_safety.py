@@ -9,7 +9,8 @@ Covers the scenarios required by the production-safe remediation design:
   E. WordPress (unmapped)              -> no POST /orders, manual fulfillment
   F. Provider ACTIVE                   -> ACTIVE + confirmation email + PROVISIONED/SUCCESS
   G. Provider PENDING                  -> PENDING + pending email + retry scheduled
-  H. Provider failure                  -> PROVISIONING_FAILED + FAILED/FAILED + failed email
+  H. Provider failure                  -> PROVISIONING_PENDING + IN_PROGRESS/PENDING + pending email
+  I. Provider exception                -> subscription/invoice remain persisted
   I. Provider exception                -> subscription/invoice remain persisted
   J. Retry reconciles GET /orders first; adopts existing order; no duplicate POST
   K. Duplicate retry concurrency       -> row-locking used; one provisioning attempt
@@ -30,11 +31,16 @@ import pytest
 from app.entity.technology_services.technology_service_entity import TechnologyServiceEntity
 from app.service.cart.cart_checkout_service import (
     CartCheckoutService,
+    _checkout_financials_for_track,
+    _ensure_paid_technology_service_subscription,
     _tech_backoff_for,
     _tech_fulfillment_from_result,
     _tech_sub_periods,
+    _technology_idempotency_key,
+    _technology_paid_totals,
 )
 from app.service.platform.track_record_service import FulfillmentStatus, OverallStatus
+from app.utils.cart_enums import CartProductType
 
 
 # --------------------------------------------------------------------------- #
@@ -82,6 +88,23 @@ def _make_buyer():
     return buyer
 
 
+def test_checkout_financials_for_track_uses_paid_total_for_technology() -> None:
+    item = MagicMock()
+    item.product_type = CartProductType.TECHNOLOGY
+    item.metadata_json = {
+        "_checkout_unit_price_inr": 4667.0,
+        "_checkout_subtotal_inr": 4667.0,
+        "_checkout_gst_inr": 840.06,
+        "_checkout_total_inr": 5507.06,
+    }
+
+    assert _checkout_financials_for_track(item) == {
+        "amount_charged": 5507.06,
+        "subtotal_ex_gst": 4667.0,
+        "gst_amount": 840.06,
+    }
+
+
 class _FakeSubscription:
     """Minimal stand-in for TechnologySubscriptionEntity with the retry fields."""
 
@@ -104,6 +127,8 @@ class _FakeSubscription:
         self.auto_renew = True
         self.email_sent = False
         self.confirmation_sent = False
+        self.access_email_sent = kw.get("access_email_sent", False)
+        self.access_email_status = kw.get("access_email_status", "PENDING")
         self.idempotency_key = kw.get("idempotency_key")
         self.provision_attempts = kw.get("provision_attempts", 0)
         self.last_provision_attempt_at = None
@@ -131,7 +156,9 @@ def _checkout_context(svc: TechnologyServiceEntity, item: MagicMock):
                 patch("app.service.auth.mail_service.MailService"),
                 patch("app.utils.addon_services.create_addon_operations_requests"),
             ]
-            return tuple(self._stack.enter_context(p) for p in patchers)
+            mocks = tuple(self._stack.enter_context(p) for p in patchers)
+            mocks[5].send_technology_service_access_email = AsyncMock()
+            return mocks
 
         def __exit__(self, *exc):
             return self._stack.__exit__(*exc)
@@ -471,10 +498,10 @@ def test_g_provider_pending_maps_to_in_progress_pending():
     assert ec is None
 
 
-def test_h_provider_failure_maps_to_failed():
+def test_h_provider_failure_maps_to_pending_retry():
     f, o, ec, em = _tech_fulfillment_from_result({"status": "FAILED", "error": "rejected"})
-    assert f == FulfillmentStatus.FAILED
-    assert o == OverallStatus.FAILED
+    assert f == FulfillmentStatus.IN_PROGRESS
+    assert o == OverallStatus.PENDING
     assert ec == "SERVICE_PROVISIONING_FAILED"
     assert em
 
@@ -494,7 +521,9 @@ def _retry_service_context():
                 patch("app.service.technology.technology_subscription_retry_service.TrackRecordService"),
                 patch("app.repository.track_record_repository.TrackRecordRepository"),
             ]
-            return tuple(self._stack.enter_context(p) for p in patchers)
+            mocks = tuple(self._stack.enter_context(p) for p in patchers)
+            mocks[1].send_technology_service_access_email = AsyncMock()
+            return mocks
 
         def __exit__(self, *exc):
             return self._stack.__exit__(*exc)
@@ -581,6 +610,86 @@ async def test_j_retry_no_existing_order_then_provisions_once():
         assert sub.provider_order_id == "ORD-NEW"
         assert sub.provision_attempts == 2
         mock_client.provision_service.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_j_active_subscription_without_confirmation_sends_email_only():
+    from app.service.technology.technology_subscription_retry_service import (
+        TechnologySubscriptionRetryService,
+    )
+
+    sub = _FakeSubscription(
+        status="ACTIVE",
+        provider_order_id="ORD-ACTIVE",
+        provider_subscription_id="SUB-ACTIVE",
+    )
+    sub.email_sent = False
+    sub.confirmation_sent = False
+
+    class _User:
+        email = "buyer@deltapreneur.com"
+        id = "33333333-3333-3333-3333-333333333333"
+
+    mock_session = MagicMock()
+    mock_session.flush = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=_User())))
+
+    with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        MockMail.send_technology_purchase_confirmation_email = AsyncMock()
+
+        svc = TechnologySubscriptionRetryService(mock_session)
+        outcome = await svc._process(sub)
+
+        assert outcome == "email"
+        MockMail.send_technology_purchase_confirmation_email.assert_called_once()
+        call = MockMail.send_technology_purchase_confirmation_email.call_args.kwargs
+        assert call["to_email"] == "buyer@deltapreneur.com"
+        assert call["razorpay_payment_id"] == "pay_test"
+        assert sub.email_sent is True
+        assert sub.confirmation_sent is True
+        mock_client.find_matching_order.assert_not_called()
+        mock_client.provision_service.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_j_active_subscription_confirmation_email_failure_stays_retryable():
+    from app.service.technology.technology_subscription_retry_service import (
+        TechnologySubscriptionRetryService,
+    )
+
+    sub = _FakeSubscription(
+        status="ACTIVE",
+        provider_order_id="ORD-ACTIVE",
+        provider_subscription_id="SUB-ACTIVE",
+    )
+    sub.email_sent = False
+    sub.confirmation_sent = False
+
+    class _User:
+        email = "buyer@deltapreneur.com"
+        id = "33333333-3333-3333-3333-333333333333"
+
+    mock_session = MagicMock()
+    mock_session.flush = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=_User())))
+
+    with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        MockMail.send_technology_purchase_confirmation_email = AsyncMock(
+            side_effect=RuntimeError("SMTP 535 authentication failed")
+        )
+
+        svc = TechnologySubscriptionRetryService(mock_session)
+        outcome = await svc._process(sub)
+
+        assert outcome == "email_failed"
+        assert sub.email_sent is False
+        assert sub.confirmation_sent is False
+        mock_client.find_matching_order.assert_not_called()
+        mock_client.provision_service.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -677,8 +786,13 @@ async def test_l_duplicate_verification_returns_already_processed():
         # The subscription already exists -> verify returns alreadyProcessed.
         mock_execute = AsyncMock()
         mock_execute.return_value = MagicMock(
-            scalar_one_or_none=MagicMock(side_effect=[_ExistingSub(), None]),
-            scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))),
+            scalar_one_or_none=MagicMock(return_value=_ExistingSub()),
+            scalars=MagicMock(
+                return_value=MagicMock(
+                    all=MagicMock(return_value=[_ExistingSub()]),
+                    first=MagicMock(return_value=_ExistingSub()),
+                )
+            ),
         )
 
         mock_purchase_repo = MagicMock()
@@ -798,6 +912,151 @@ async def test_n_retry_sends_confirmation_once_and_sets_flags():
 
 
 @pytest.mark.asyncio
+async def test_active_crm_retry_sends_access_email_with_stored_credentials():
+    from app.service.technology.technology_subscription_retry_service import (
+        TechnologySubscriptionRetryService,
+    )
+
+    sub = _FakeSubscription(
+        service_slug="crm",
+        service_name="CRM",
+        status="PENDING",
+        provision_attempts=0,
+    )
+
+    with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
+        mock_client = MagicMock()
+        mock_client.find_matching_order.return_value = None
+        mock_client.provision_service.return_value = {
+            "success": True,
+            "status": "ACTIVE",
+            "service_id": "CRM-SVC-1",
+            "provider_order_id": "ORD-CRM",
+            "credentials": {
+                "email": "crm-login@example.test",
+                "password": "crm-test-password",
+            },
+            "current_period_start": datetime.now(timezone.utc),
+            "current_period_end": datetime.now(timezone.utc) + timedelta(days=30),
+        }
+        mock_get_client.return_value = mock_client
+        MockMail.send_technology_purchase_confirmation_email = AsyncMock()
+        MockMail.send_technology_service_access_email = AsyncMock()
+        MockTrackRepo.return_value = MagicMock(
+            find_by_razorpay_payment_id=AsyncMock(return_value=None),
+            find_by_razorpay_order_id=AsyncMock(return_value=None),
+        )
+        class _User:
+            email = "buyer@cobrother.com"
+            firstname = "Test"
+            lastname = "Buyer"
+            id = "33333333-3333-3333-3333-333333333333"
+
+        mock_session = MagicMock()
+        mock_session.flush = AsyncMock()
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                MagicMock(scalar_one_or_none=MagicMock(return_value=None)),
+                MagicMock(scalar_one_or_none=MagicMock(return_value=_User())),
+            ]
+        )
+
+        svc = TechnologySubscriptionRetryService(mock_session)
+        outcome = await svc._process(sub)
+
+        assert outcome == "activated"
+        assert sub.status == "ACTIVE"
+        MockMail.send_technology_purchase_confirmation_email.assert_called_once()
+        MockMail.send_technology_service_access_email.assert_called_once()
+        call = MockMail.send_technology_service_access_email.call_args.kwargs
+        assert call["to_email"] == "buyer@cobrother.com"
+        fields = {field["key"]: field for field in call["access_fields"]}
+        assert fields["email"]["value"] == "crm-login@example.test"
+        assert fields["password"]["value"] == "crm-test-password"
+        assert sub.access_email_sent is True
+
+
+@pytest.mark.asyncio
+async def test_access_email_smtp_failure_remains_retryable():
+    from app.service.technology.provider_access import dump_provider_credentials
+    from app.service.technology.technology_subscription_retry_service import (
+        TechnologySubscriptionRetryService,
+    )
+
+    sub = _FakeSubscription(
+        service_slug="crm",
+        service_name="CRM",
+        status="ACTIVE",
+        provider_subscription_id="CRM-SVC-1",
+        credentials_json=dump_provider_credentials(
+            {"email": "crm-login@example.test", "password": "crm-test-password"}
+        ),
+    )
+    sub.confirmation_sent = True
+    sub.email_sent = True
+    sub.access_email_sent = False
+
+    class _User:
+        email = "buyer@deltapreneur.com"
+        firstname = "Test"
+        lastname = "Buyer"
+        id = "33333333-3333-3333-3333-333333333333"
+
+    mock_session = MagicMock()
+    mock_session.flush = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=_User())))
+
+    with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
+        mock_get_client.return_value = MagicMock()
+        MockMail.send_technology_purchase_confirmation_email = AsyncMock()
+        MockMail.send_technology_service_access_email = AsyncMock(side_effect=RuntimeError("SMTP rejected"))
+
+        svc = TechnologySubscriptionRetryService(mock_session)
+        outcome = await svc._process(sub)
+
+        assert outcome == "access_failed"
+        assert sub.access_email_sent is False
+        assert sub.access_email_status == "FAILED"
+        MockMail.send_technology_service_access_email.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_access_email_sent_flag_prevents_duplicate_send():
+    from app.service.technology.provider_access import dump_provider_credentials
+    from app.service.technology.technology_subscription_retry_service import (
+        TechnologySubscriptionRetryService,
+    )
+
+    sub = _FakeSubscription(
+        service_slug="crm",
+        service_name="CRM",
+        status="ACTIVE",
+        provider_subscription_id="CRM-SVC-1",
+        credentials_json=dump_provider_credentials(
+            {"email": "crm-login@example.test", "password": "crm-test-password"}
+        ),
+        access_email_sent=True,
+    )
+    sub.confirmation_sent = True
+    sub.email_sent = True
+
+    mock_session = MagicMock()
+    mock_session.flush = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
+
+    with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
+        mock_get_client.return_value = MagicMock()
+        MockMail.send_technology_purchase_confirmation_email = AsyncMock()
+        MockMail.send_technology_service_access_email = AsyncMock()
+
+        svc = TechnologySubscriptionRetryService(mock_session)
+        outcome = await svc._process(sub)
+
+        assert outcome == "already_active"
+        MockMail.send_technology_service_access_email.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_n_pending_email_sent_once_for_needs_input():
     from app.service.technology.technology_subscription_retry_service import (
         TechnologySubscriptionRetryService,
@@ -854,8 +1113,10 @@ def test_o_track_invariant_enforced_by_fulfillment_mapper():
             assert (f, o) == (FulfillmentStatus.PROVISIONED, OverallStatus.SUCCESS)
         elif status in ("PENDING", "PAYMENT_CAPTURED", "PROVISIONING"):
             assert (f, o) == (FulfillmentStatus.IN_PROGRESS, OverallStatus.PENDING)
-        else:
+        elif status == "CANCELLED":
             assert (f, o) == (FulfillmentStatus.FAILED, OverallStatus.FAILED)
+        else:
+            assert (f, o) == (FulfillmentStatus.IN_PROGRESS, OverallStatus.PENDING)
 
 
 # --------------------------------------------------------------------------- #
@@ -897,6 +1158,15 @@ async def test_p_verify_checkout_failure_uses_metadata_price_not_unit_price_inr(
 
     session = MagicMock()
     session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    session.execute = AsyncMock(
+        return_value=MagicMock(
+            scalar_one_or_none=MagicMock(return_value=None),
+            scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]), first=MagicMock(return_value=None))),
+        )
+    )
+    session.flush = AsyncMock()
+    session.add = MagicMock()
     repo = MagicMock()
     repo.get_by_user_for_update = AsyncMock(return_value=[item])
 
@@ -912,6 +1182,15 @@ async def test_p_verify_checkout_failure_uses_metadata_price_not_unit_price_inr(
 
     async def fake_record_paid_attempt(self, **kw):  # noqa: ANN001 - mock instance method
         recorded.update(kw)
+
+    durable = {
+        "type": "TECHNOLOGY",
+        "isService": True,
+        "subscriptionId": "sub-rescued",
+        "invoiceNumber": "INV-CB-TEST",
+        "status": "PROVISIONING_PENDING",
+        "durablePurchaseCreated": True,
+    }
 
     with ExitStack() as stack:
         stack.enter_context(
@@ -937,11 +1216,518 @@ async def test_p_verify_checkout_failure_uses_metadata_price_not_unit_price_inr(
                 new=AsyncMock(),
             )
         )
+        stack.enter_context(
+            patch(
+                "app.service.cart.cart_checkout_service._ensure_paid_technology_service_subscription",
+                new=AsyncMock(return_value=durable),
+            )
+        )
 
         result = await svc.verify_checkout_payment(buyer, req)
 
     assert recorded.get("amount_charged") == 1909.0
-    assert recorded.get("fulfillment_status") == FulfillmentStatus.FAILED
-    assert recorded.get("overall_status") == OverallStatus.FAILED
+    assert recorded.get("fulfillment_status") == FulfillmentStatus.IN_PROGRESS
+    assert recorded.get("overall_status") == OverallStatus.PENDING
+    assert recorded.get("error_code") == "SERVICE_PROVISIONING_FAILED"
+    assert recorded.get("payment_status") == "CAPTURED"
     assert result["success"] is False
     assert result["needsAttention"] is True
+    item_result = next(r for r in result["results"] if r.get("itemId") == str(item.id))
+    assert item_result["durablePurchaseCreated"] is True
+    assert item_result["subscriptionId"] == "sub-rescued"
+
+
+def _added_of_type(added: list, name: str):
+    return next((obj for obj in added if type(obj).__name__ == name), None)
+
+
+def _session_for_checkout(added: list) -> MagicMock:
+    def fake_add(obj):
+        added.append(obj)
+        if not getattr(obj, "id", None):
+            obj.id = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+
+    mock_session = MagicMock()
+    mock_session.add = MagicMock(side_effect=fake_add)
+    mock_session.flush = AsyncMock()
+    mock_session.commit = AsyncMock()
+    mock_session.rollback = AsyncMock()
+    mock_session.execute = AsyncMock(
+        return_value=MagicMock(
+            scalar_one_or_none=MagicMock(return_value=None),
+            scalars=MagicMock(
+                return_value=MagicMock(
+                    all=MagicMock(return_value=[]),
+                    first=MagicMock(return_value=None),
+                )
+            ),
+        )
+    )
+    return mock_session
+
+
+@pytest.mark.asyncio
+async def test_h_provider_failure_keeps_paid_purchase_pending():
+    svc = _make_tech_service("cloud-storage", provider_product_key="cloud_storage")
+    item = _make_cart_item(svc.id, "cloud-storage")
+    item.metadata_json.update({
+        "_checkout_unit_price_inr": 4667.0,
+        "_checkout_subtotal_inr": 4667.0,
+        "_checkout_gst_inr": 840.06,
+        "_checkout_total_inr": 5507.06,
+    })
+    buyer = _make_buyer()
+    added: list = []
+
+    with _checkout_context(svc, item) as (MockCart, MockRepo, mock_get_client, MockPurchase, MockCobrother, MockMail, MockAddon):
+        mock_cart_svc = MockCart.return_value
+        mock_cart_svc._get_technology_service = AsyncMock(return_value=svc)
+        mock_cart_svc._get_technology_service_fallback = AsyncMock(return_value=None)
+        mock_purchase_repo = MagicMock()
+        mock_purchase_repo.get_by_razorpay_payment_id = AsyncMock(return_value=None)
+        MockPurchase.return_value = mock_purchase_repo
+        MockCobrother.return_value = MagicMock(create=AsyncMock())
+        MockMail.send_technology_purchase_pending_email = AsyncMock()
+
+        mock_client = MagicMock()
+        mock_client.reconcile_pending_provisioning.return_value = {"reconciled": False, "provider_order_id": None}
+        mock_client.provision_service.return_value = {
+            "success": False,
+            "status": "FAILED",
+            "error": "ResellPortal 502",
+        }
+        mock_get_client.return_value = mock_client
+
+        mock_session = _session_for_checkout(added)
+        service = CartCheckoutService(mock_session)
+        result = await service._complete_technology_purchase(
+            item=item, buyer=buyer, razorpay_payment_id="pay_h",
+            buyer_name="Test Buyer", buyer_email="buyer@cobrother.com", buyer_phone="+919999999999",
+        )
+
+        assert result["success"] is False
+        assert result["status"] == "PROVISIONING_PENDING"
+        assert result["subscriptionId"]
+        sub = _added_of_type(added, "TechnologySubscriptionEntity")
+        invoice = _added_of_type(added, "TechnologySubscriptionInvoiceEntity")
+        assert sub is not None
+        assert sub.payment_status == "CAPTURED"
+        assert sub.status == "PENDING"
+        assert sub.last_provider_error
+        assert invoice is not None
+        assert float(invoice.amount) == 5507.06
+        MockMail.send_technology_purchase_pending_email.assert_called_once()
+        MockMail.send_technology_purchase_failed_email.assert_not_called()
+        MockMail.send_technology_purchase_confirmation_email.assert_not_called()
+        assert mock_session.commit.await_count >= 1
+        f, o, ec, em = _tech_fulfillment_from_result(result, is_service=True)
+        assert (f, o) == (FulfillmentStatus.IN_PROGRESS, OverallStatus.PENDING)
+        assert ec == "SERVICE_PROVISIONING_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_i_provider_exception_after_commit_keeps_paid_purchase():
+    svc = _make_tech_service("cloud-storage", provider_product_key="cloud_storage")
+    item = _make_cart_item(svc.id, "cloud-storage")
+    buyer = _make_buyer()
+    added: list = []
+
+    with _checkout_context(svc, item) as (MockCart, MockRepo, mock_get_client, MockPurchase, MockCobrother, MockMail, MockAddon):
+        mock_cart_svc = MockCart.return_value
+        mock_cart_svc._get_technology_service = AsyncMock(return_value=svc)
+        mock_cart_svc._get_technology_service_fallback = AsyncMock(return_value=None)
+        MockPurchase.return_value = MagicMock(get_by_razorpay_payment_id=AsyncMock(return_value=None))
+        MockCobrother.return_value = MagicMock(create=AsyncMock())
+        MockMail.send_technology_purchase_pending_email = AsyncMock()
+
+        mock_client = MagicMock()
+        mock_client.reconcile_pending_provisioning.return_value = {"reconciled": False}
+        mock_client.provision_service.side_effect = RuntimeError("provider timeout")
+        mock_get_client.return_value = mock_client
+
+        mock_session = _session_for_checkout(added)
+        service = CartCheckoutService(mock_session)
+        result = await service._complete_technology_purchase(
+            item=item, buyer=buyer, razorpay_payment_id="pay_i",
+            buyer_name="Test Buyer", buyer_email="buyer@cobrother.com", buyer_phone="+919999999999",
+        )
+
+        assert result["status"] == "PROVISIONING_PENDING"
+        assert result["success"] is False
+        sub = _added_of_type(added, "TechnologySubscriptionEntity")
+        assert sub is not None
+        assert sub.payment_status == "CAPTURED"
+        assert sub.status == "PENDING"
+        assert "timeout" in (sub.last_provider_error or "")
+        MockMail.send_technology_purchase_pending_email.assert_called_once()
+        MockMail.send_technology_purchase_failed_email.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_rescue_creates_durable_paid_subscription_and_invoice():
+    item = _make_cart_item("11111111-1111-1111-1111-111111111111", "cloud-storage")
+    item.metadata_json.update({
+        "_checkout_unit_price_inr": 4667.0,
+        "_checkout_subtotal_inr": 4667.0,
+        "_checkout_gst_inr": 840.06,
+        "_checkout_total_inr": 5507.06,
+    })
+    buyer = _make_buyer()
+    added: list = []
+    session = _session_for_checkout(added)
+
+    with patch("app.service.auth.mail_service.MailService.send_technology_purchase_pending_email", new=AsyncMock()) as send_mail:
+        result = await _ensure_paid_technology_service_subscription(
+            session,
+            item=item,
+            buyer=buyer,
+            razorpay_order_id="order_rescue",
+            razorpay_payment_id="pay_rescue",
+            buyer_details={"name": "Test Buyer", "email": "buyer@cobrother.com", "phone": "+919999999999"},
+            track_financials=_checkout_financials_for_track(item),
+            provisioning_error=RuntimeError("crashed before subscription create"),
+        )
+
+    assert result["durablePurchaseCreated"] is True
+    assert result["status"] == "PROVISIONING_PENDING"
+    sub = _added_of_type(added, "TechnologySubscriptionEntity")
+    invoice = _added_of_type(added, "TechnologySubscriptionInvoiceEntity")
+    assert sub is not None
+    assert sub.payment_status == "CAPTURED"
+    assert sub.status == "PENDING"
+    assert sub.razorpay_payment_id == "pay_rescue"
+    assert invoice is not None
+    assert float(invoice.amount) == 5507.06
+    send_mail.assert_called_once()
+    assert session.commit.await_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_rescue_is_idempotent_for_same_payment():
+    existing = _FakeSubscription(status="PENDING", razorpay_payment_id="pay_dup")
+    existing.id = "existing-rescue-sub"
+    existing.email_sent = True
+    existing.price = 4667.0
+    item = _make_cart_item("11111111-1111-1111-1111-111111111111", "cloud-storage")
+    buyer = _make_buyer()
+    added: list = []
+    session = _session_for_checkout(added)
+    session.execute = AsyncMock(
+        return_value=MagicMock(
+            scalar_one_or_none=MagicMock(return_value=existing),
+            scalars=MagicMock(
+                return_value=MagicMock(
+                    all=MagicMock(return_value=[existing]),
+                    first=MagicMock(return_value=MagicMock(invoice_number="INV-EXISTING", amount=5507.06)),
+                )
+            ),
+        )
+    )
+
+    with patch("app.service.auth.mail_service.MailService.send_technology_purchase_pending_email", new=AsyncMock()) as send_mail:
+        first = await _ensure_paid_technology_service_subscription(
+            session,
+            item=item,
+            buyer=buyer,
+            razorpay_order_id="order_dup",
+            razorpay_payment_id="pay_dup",
+            buyer_details={"name": "Test Buyer", "email": "buyer@cobrother.com", "phone": ""},
+            track_financials={"amount_charged": 5507.06, "subtotal_ex_gst": 4667.0, "gst_amount": 840.06},
+            provisioning_error=RuntimeError("again"),
+        )
+        second = await _ensure_paid_technology_service_subscription(
+            session,
+            item=item,
+            buyer=buyer,
+            razorpay_order_id="order_dup",
+            razorpay_payment_id="pay_dup",
+            buyer_details={"name": "Test Buyer", "email": "buyer@cobrother.com", "phone": ""},
+            track_financials={"amount_charged": 5507.06, "subtotal_ex_gst": 4667.0, "gst_amount": 840.06},
+            provisioning_error=RuntimeError("again"),
+        )
+
+    assert first["subscriptionId"] == "existing-rescue-sub"
+    assert second["subscriptionId"] == "existing-rescue-sub"
+    assert not any(type(obj).__name__ == "TechnologySubscriptionEntity" for obj in added)
+    send_mail.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_retry_provider_failure_keeps_purchase_pending():
+    from app.service.technology.technology_subscription_retry_service import (
+        TechnologySubscriptionRetryService,
+    )
+
+    sub = _FakeSubscription(
+        status="PENDING",
+        provision_attempts=1,
+        provision_input=json.dumps({"areaCode": "415"}),
+    )
+
+    with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
+        mock_client = MagicMock()
+        mock_client.find_matching_order.return_value = None
+        mock_client.provision_service.return_value = {
+            "success": False, "status": "FAILED", "error": "still down",
+        }
+        mock_get_client.return_value = mock_client
+        MockMail.send_technology_purchase_pending_email = AsyncMock()
+        MockTrackRepo.return_value = MagicMock(
+            find_by_razorpay_payment_id=AsyncMock(return_value=None),
+            find_by_razorpay_order_id=AsyncMock(return_value=None),
+        )
+        mock_session = MagicMock()
+        mock_session.flush = AsyncMock()
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
+
+        svc = TechnologySubscriptionRetryService(mock_session)
+        svc._max_retries = 5
+        outcome = await svc._process(sub)
+
+        assert outcome == "pending"
+        assert sub.status == "PENDING"
+        assert sub.payment_status == "CAPTURED"
+        MockMail.send_technology_purchase_failed_email.assert_not_called()
+        mock_client.provision_service.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_email_failure_does_not_drop_paid_purchase():
+    svc = _make_tech_service("cloud-storage", provider_product_key="cloud_storage")
+    item = _make_cart_item(svc.id, "cloud-storage")
+    buyer = _make_buyer()
+    added: list = []
+
+    with _checkout_context(svc, item) as (MockCart, MockRepo, mock_get_client, MockPurchase, MockCobrother, MockMail, MockAddon):
+        mock_cart_svc = MockCart.return_value
+        mock_cart_svc._get_technology_service = AsyncMock(return_value=svc)
+        mock_cart_svc._get_technology_service_fallback = AsyncMock(return_value=None)
+        MockPurchase.return_value = MagicMock(get_by_razorpay_payment_id=AsyncMock(return_value=None))
+        MockCobrother.return_value = MagicMock(create=AsyncMock())
+        MockMail.send_technology_purchase_pending_email = AsyncMock(side_effect=RuntimeError("SMTP blip"))
+
+        mock_client = MagicMock()
+        mock_client.reconcile_pending_provisioning.return_value = {"reconciled": False}
+        mock_client.provision_service.return_value = {"success": False, "status": "FAILED", "error": "nope"}
+        mock_get_client.return_value = mock_client
+
+        mock_session = _session_for_checkout(added)
+        service = CartCheckoutService(mock_session)
+        result = await service._complete_technology_purchase(
+            item=item, buyer=buyer, razorpay_payment_id="pay_email_fail",
+            buyer_name="Test Buyer", buyer_email="buyer@cobrother.com", buyer_phone="+919999999999",
+        )
+
+        sub = _added_of_type(added, "TechnologySubscriptionEntity")
+        invoice = _added_of_type(added, "TechnologySubscriptionInvoiceEntity")
+        assert result["subscriptionId"]
+        assert sub is not None
+        assert sub.payment_status == "CAPTURED"
+        assert sub.email_sent is False
+        assert invoice is not None
+
+
+def test_technology_idempotency_key_is_stable():
+    assert _technology_idempotency_key("pay_1", "cloud-storage") == _technology_idempotency_key("pay_1", "cloud-storage")
+    assert _technology_idempotency_key("pay_1", "cloud-storage") != _technology_idempotency_key("pay_2", "cloud-storage")
+
+
+def test_technology_paid_totals_preserve_gst_inclusive_amount():
+    item = MagicMock()
+    item.product_type = CartProductType.TECHNOLOGY
+    item.metadata_json = {
+        "_checkout_unit_price_inr": 4667.0,
+        "_checkout_subtotal_inr": 4667.0,
+        "_checkout_gst_inr": 840.06,
+        "_checkout_total_inr": 5507.06,
+    }
+    subtotal, gst, paid = _technology_paid_totals(item, fallback_price=0.0)
+    assert subtotal == 4667.0
+    assert gst == 840.06
+    assert paid == 5507.06
+
+
+@pytest.mark.asyncio
+async def test_retry_provider_failure_keeps_captured_and_retryable():
+    from app.service.technology.technology_purchase_status import (
+        customer_activation_view,
+        is_failed_provisioning_queue_item,
+    )
+    from app.service.technology.technology_subscription_retry_service import (
+        TechnologySubscriptionRetryService,
+    )
+
+    sub = _FakeSubscription(
+        service_slug="link-in-bio",
+        service_name="Link in Bio",
+        status="PROVISIONING_FAILED",
+        provision_attempts=1,
+        provider_order_id=None,
+    )
+
+    with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
+        mock_client = MagicMock()
+        mock_client.find_matching_order.return_value = None
+        mock_client.provision_service.return_value = {
+            "success": False,
+            "status": "PROVISIONING_PENDING",
+            "fallback": True,
+            "error": "SSL handshake timed out",
+            "provider_order_id": None,
+        }
+        mock_get_client.return_value = mock_client
+        MockTrackRepo.return_value = MagicMock(
+            find_by_razorpay_payment_id=AsyncMock(return_value=None),
+            find_by_razorpay_order_id=AsyncMock(return_value=None),
+        )
+        mock_session = MagicMock()
+        mock_session.flush = AsyncMock()
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
+
+        svc = TechnologySubscriptionRetryService(mock_session)
+        outcome = await svc._process(sub)
+
+        assert outcome in ("failed", "pending")
+        assert sub.payment_status == "CAPTURED"
+        assert sub.status != "ACTIVE"
+        assert sub.provider_order_id is None
+        assert is_failed_provisioning_queue_item(sub) is True
+        view = customer_activation_view(sub, max_retries=5)
+        assert view["paymentStatus"] == "COMPLETED"
+        assert view["activationStatusLabel"] == "Pending Activation"
+        mock_client.find_matching_order.assert_called_once()
+        mock_client.provision_service.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_retry_timeout_then_reconcile_adopts_without_duplicate_post():
+    from app.service.technology.technology_subscription_retry_service import (
+        TechnologySubscriptionRetryService,
+    )
+
+    sub = _FakeSubscription(
+        service_slug="link-in-bio",
+        service_name="Link in Bio",
+        status="PROVISIONING_FAILED",
+        provision_attempts=1,
+        provider_order_id=None,
+    )
+
+    with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
+        mock_client = MagicMock()
+        mock_client.find_matching_order.side_effect = [
+            None,
+            {
+                "provider_order_id": "ORD-RECOVERED",
+                "provider_subscription_id": "SUB-RECOVERED",
+                "status": "ACTIVE",
+            },
+        ]
+        mock_client.provision_service.return_value = {
+            "success": False,
+            "status": "PROVISIONING_PENDING",
+            "fallback": True,
+            "error": "timeout after provider create",
+            "provider_order_id": None,
+        }
+        mock_get_client.return_value = mock_client
+        MockMail.send_technology_purchase_confirmation_email = AsyncMock()
+        MockTrackRepo.return_value = MagicMock(
+            find_by_razorpay_payment_id=AsyncMock(return_value=None),
+            find_by_razorpay_order_id=AsyncMock(return_value=None),
+        )
+        mock_session = MagicMock()
+        mock_session.flush = AsyncMock()
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
+
+        svc = TechnologySubscriptionRetryService(mock_session)
+        first = await svc._process(sub)
+        assert first in ("failed", "pending")
+        assert sub.status != "ACTIVE"
+        mock_client.provision_service.assert_called_once()
+
+        second = await svc._process(sub)
+        assert second == "adopted"
+        assert sub.status == "ACTIVE"
+        assert sub.provider_order_id == "ORD-RECOVERED"
+        assert sub.provider_subscription_id == "SUB-RECOVERED"
+        mock_client.provision_service.assert_called_once()
+        assert mock_client.find_matching_order.call_count == 2
+        MockMail.send_technology_purchase_confirmation_email.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_activation_email_failure_does_not_rollback_active():
+    from app.service.technology.technology_subscription_retry_service import (
+        TechnologySubscriptionRetryService,
+    )
+
+    sub = _FakeSubscription(
+        service_slug="link-in-bio",
+        service_name="Link in Bio",
+        status="PENDING",
+        provision_attempts=0,
+        provider_order_id=None,
+    )
+
+    with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
+        mock_client = MagicMock()
+        mock_client.find_matching_order.return_value = None
+        mock_client.provision_service.return_value = {
+            "success": True,
+            "status": "ACTIVE",
+            "provider_order_id": "ORD-OK",
+            "provider_subscription_id": "SUB-OK",
+            "credentials": {},
+            "current_period_start": datetime.now(timezone.utc),
+            "current_period_end": datetime.now(timezone.utc) + timedelta(days=30),
+        }
+        mock_get_client.return_value = mock_client
+        MockMail.send_technology_purchase_confirmation_email = AsyncMock(
+            side_effect=RuntimeError("smtp rejected")
+        )
+        MockTrackRepo.return_value = MagicMock(
+            find_by_razorpay_payment_id=AsyncMock(return_value=None),
+            find_by_razorpay_order_id=AsyncMock(return_value=None),
+        )
+        mock_session = MagicMock()
+        mock_session.flush = AsyncMock()
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
+
+        svc = TechnologySubscriptionRetryService(mock_session)
+        outcome = await svc._process(sub)
+
+        assert outcome == "activated"
+        assert sub.status == "ACTIVE"
+        assert sub.payment_status == "CAPTURED"
+        assert sub.provider_order_id == "ORD-OK"
+        assert sub.confirmation_sent is False
+        assert "confirmation email could not be sent" in (sub.last_provider_error or "")
+
+
+@pytest.mark.asyncio
+async def test_retry_subscription_refuses_unpaid_and_never_posts():
+    from app.service.technology.technology_subscription_retry_service import (
+        TechnologySubscriptionRetryService,
+    )
+
+    sub = _FakeSubscription(status="PROVISIONING_FAILED", provider_order_id=None)
+    sub.payment_status = "FAILED"
+    mock_session = MagicMock()
+    mock_session.flush = AsyncMock()
+    mock_session.commit = AsyncMock()
+    mock_session.execute = AsyncMock(
+        return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=sub))
+    )
+
+    with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        svc = TechnologySubscriptionRetryService(mock_session)
+        result = await svc.retry_subscription(sub.id, force=True)
+        assert result["success"] is False
+        assert "not paid" in (result.get("error") or "")
+        mock_client.find_matching_order.assert_not_called()
+        mock_client.provision_service.assert_not_called()
+
+

@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from fastapi_mail import ConnectionConfig
@@ -8,6 +9,7 @@ from fastapi_mail.schemas import MultipartSubtypeEnum
 
 from app.core.config import settings
 
+from app.service.auth.smtp_diagnostics import ensure_truststore_for_mail_tls, safe_exception_payload
 from app.service.auth.email_templates import (
     becobrother_application_email_template,
     cobrother_assignment_email_template,
@@ -40,6 +42,7 @@ from app.service.auth.email_templates import (
     technology_purchase_confirmation_email_template,
     technology_purchase_failed_email_template,
     technology_purchase_pending_email_template,
+    technology_service_access_email_template,
     verification_email_template,
     virtual_assistant_application_email_template,
     virtual_assistant_application_confirmation_email_template,
@@ -48,6 +51,10 @@ from app.service.auth.email_templates import (
     virtual_assistant_new_assignment_email_template,
     virtual_assistant_assignment_cancelled_email_template,
 )
+from app.utils.email_mask import mask_email
+
+
+logger = logging.getLogger(__name__)
 
 
 class MailService:
@@ -83,6 +90,7 @@ class MailService:
 
     @staticmethod
     def _conf() -> ConnectionConfig:
+        ensure_truststore_for_mail_tls()
         return ConnectionConfig(
             MAIL_USERNAME=settings.MAIL_USERNAME,
             MAIL_PASSWORD=settings.MAIL_PASSWORD,
@@ -99,6 +107,7 @@ class MailService:
     @staticmethod
     def _conf_for_domains() -> ConnectionConfig:
         """SMTP config for domain lifecycle mail (domains@ mailbox when configured)."""
+        ensure_truststore_for_mail_tls()
         return ConnectionConfig(
             MAIL_USERNAME=settings.resolved_mail_domains_username(),
             MAIL_PASSWORD=settings.resolved_mail_domains_password(),
@@ -110,6 +119,45 @@ class MailService:
             MAIL_FROM_NAME=settings.MAIL_FROM_NAME,
             USE_CREDENTIALS=True,
             VALIDATE_CERTS=True,
+        )
+
+    @staticmethod
+    async def _send_tracked_technology_message(
+        *,
+        message: MessageSchema,
+        recipient: str,
+        template: str,
+    ) -> None:
+        masked_recipient = mask_email(recipient)
+        logger.info(
+            "technology.purchase.email.triggered recipient=%s sender=%s template=%s",
+            masked_recipient,
+            settings.MAIL_FROM,
+            template,
+        )
+        try:
+            fm = FastMail(MailService._conf())
+            await fm.send_message(message)
+        except Exception as exc:
+            details = safe_exception_payload(exc)
+            logger.error(
+                "technology.purchase.email.smtp_result result=FAILURE recipient=%s sender=%s template=%s error_type=%s smtp_code=%s smtp_error=%s error=%s",
+                masked_recipient,
+                settings.MAIL_FROM,
+                template,
+                details.get("exception_type"),
+                details.get("smtp_code"),
+                details.get("smtp_error"),
+                details.get("exception"),
+                exc_info=True,
+            )
+            raise
+        logger.info(
+            "technology.purchase.email.smtp_result result=SUCCESS recipient=%s sender=%s template=%s message_id=%s",
+            masked_recipient,
+            settings.MAIL_FROM,
+            template,
+            "unavailable",
         )
 
     @staticmethod
@@ -242,7 +290,9 @@ class MailService:
         service_status: str,
         provider_info: str | None = None,
         purchases_url: str,
+        manage_url: str | None = None,
     ) -> None:
+        # manage_url is accepted for call-site compatibility but never rendered.
         html = technology_purchase_confirmation_email_template(
             customer_name=customer_name,
             service_name=service_name,
@@ -255,14 +305,18 @@ class MailService:
             service_status=service_status,
             provider_info=provider_info,
             purchases_url=purchases_url,
+            manage_url=None,
         )
         message = MailService._html_message(
             subject=f"Your Deltapreneur purchase is confirmed – {service_name}",
             recipients=[to_email],
             body=html,
         )
-        fm = FastMail(MailService._conf())
-        await fm.send_message(message)
+        await MailService._send_tracked_technology_message(
+            message=message,
+            recipient=to_email,
+            template="technology_purchase_confirmation",
+        )
 
     @staticmethod
     async def send_technology_purchase_pending_email(
@@ -296,8 +350,11 @@ class MailService:
             recipients=[to_email],
             body=html,
         )
-        fm = FastMail(MailService._conf())
-        await fm.send_message(message)
+        await MailService._send_tracked_technology_message(
+            message=message,
+            recipient=to_email,
+            template="technology_purchase_pending",
+        )
 
     @staticmethod
     async def send_technology_purchase_failed_email(
@@ -331,8 +388,47 @@ class MailService:
             recipients=[to_email],
             body=html,
         )
-        fm = FastMail(MailService._conf())
-        await fm.send_message(message)
+        await MailService._send_tracked_technology_message(
+            message=message,
+            recipient=to_email,
+            template="technology_purchase_failed",
+        )
+
+    @staticmethod
+    async def send_technology_service_access_email(
+        *,
+        to_email: str,
+        customer_name: str,
+        service_name: str,
+        plan_name: str,
+        billing_cycle: str,
+        service_status: str,
+        access_fields: list[dict[str, str]],
+        access_url: str | None = None,
+        activated_at: str | None = None,
+        purchase_date: str | None = None,
+    ) -> None:
+        html = technology_service_access_email_template(
+            customer_name=customer_name,
+            service_name=service_name,
+            plan_name=plan_name,
+            billing_cycle=billing_cycle,
+            service_status=service_status,
+            access_fields=access_fields,
+            access_url=access_url,
+            activated_at=activated_at,
+            purchase_date=purchase_date,
+        )
+        message = MailService._html_message(
+            subject=f"Your {service_name} is ready - Deltapreneur",
+            recipients=[to_email],
+            body=html,
+        )
+        await MailService._send_tracked_technology_message(
+            message=message,
+            recipient=to_email,
+            template="technology_service_access",
+        )
 
     @staticmethod
     async def send_software_sold_seller_notification_email(

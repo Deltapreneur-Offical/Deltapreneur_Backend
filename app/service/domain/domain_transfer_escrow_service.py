@@ -344,9 +344,7 @@ class DomainTransferEscrowService:
         # --- Fetch existing refunds from Razorpay ---
         from app.integrations.razorpay.client import _fetch_existing_refund_id
         from app.integrations.razorpay import client as rzp_client
-        client_obj = rzp_client.razorpay.Client(
-            auth=(rzp._key_id(), rzp._key_secret())
-        )
+        client_obj = rzp_client.create_client()
         refund_id = _fetch_existing_refund_id(client_obj, tx.razorpay_payment_id)
 
         # --- Determine if a FULL refund exists on Razorpay ---

@@ -4,6 +4,7 @@ import pytest
 from app.core.config import settings
 from app.integrations.resellportal.client import ResellPortalClient, get_resellportal_client
 from app.integrations.resellportal.mock_resellportal_api import MockResellPortalAPI
+import json
 
 
 def test_resellportal_unconfigured_defaults():
@@ -33,6 +34,8 @@ def test_resellportal_unconfigured_defaults():
     assert provision["status"] == "ACTIVE"
     assert "workspace.cobrother.com" in provision["credentials"]["access_url"]
     assert "resellportal" not in provision["credentials"]["access_url"].lower()
+    assert "token=" not in provision["credentials"]["access_url"].lower()
+    assert "access_token=" not in provision["credentials"]["access_url"].lower()
 
 
 def test_resellportal_configured_test_mode_injection():
@@ -118,6 +121,8 @@ def test_ai_business_suite_uses_orders_endpoint_and_required_ai_tools(monkeypatc
     assert seen["json"]["test_mode"] is True
     assert seen["json"]["skip_client_email"] is True
     assert seen["json"]["client_id"] == "test_cli_abc123"
+    assert result["provider_subscription_id"] == "RSP-SUB-ABCD"
+    assert result["provider_order_id"] == "RSP-ORD-ABCD"
 
 
 def test_resellportal_unconfigured_create_client_returns_mock():
@@ -218,3 +223,67 @@ def test_ai_business_suite_failed_provider_response_is_not_marked_active():
     assert failed_response["success"] is False
     assert failed_response["status"] != "ACTIVE"
     assert failed_response["status"] == "FAILED"
+
+
+def test_live_link_in_bio_contract_maps_service_id_without_fabrication(monkeypatch):
+    """Confirmed ResellPortal Link in Bio success body must map service_id, never RSP-ORD/SUB-{user[:8]}."""
+    import app.integrations.resellportal.client as client_module
+    from app.integrations.resellportal.client import ResellPortalClient
+
+    class DummyResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "success": True,
+                "status": "ACTIVE",
+                "service_id": "ABC123",
+                "credentials": {"access_token": "REDACTED", "username": "kushi"},
+            }
+
+    class DummyClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def request(self, method, url, headers=None, json=None, params=None):
+            return DummyResponse()
+
+    monkeypatch.setattr(client_module.httpx, "Client", DummyClient)
+    monkeypatch.setattr(ResellPortalClient, "_create_client", lambda self, email, uid: 42)
+
+    user_id = "05e5676d-e569-432d-ad4b-a1321993d102"
+    client = ResellPortalClient(
+        api_base="https://panel.resellportal.com/wp-json/resellportal/v1",
+        api_key="test_key_123",
+        api_secret="test_secret_456",
+    )
+    result = client.provision_service(
+        service_slug="link-in-bio",
+        service_name="Link in Bio",
+        plan_code="starter",
+        billing_cycle="monthly",
+        user_email="buyer@example.com",
+        user_id=user_id,
+        product_key="link_in_bio",
+    )
+
+    assert result["success"] is True
+    assert result["status"] == "ACTIVE"
+    assert result["service_id"] == "ABC123"
+    assert result["provider_subscription_id"] == "ABC123"
+    assert result["provider_order_id"] is None
+    assert result["provider_subscription_id"] != f"RSP-SUB-{user_id[:8]}"
+    assert result["provider_order_id"] != f"RSP-ORD-{user_id[:8]}"
+    assert "access_token" in result["credentials"]
+    dumped = json.dumps(
+        {k: v for k, v in result.items() if k != "credentials"},
+        default=str,
+    ).lower()
+    assert "resellportal" not in dumped
