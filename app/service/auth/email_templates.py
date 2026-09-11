@@ -1563,7 +1563,10 @@ def technology_purchase_confirmation_email_template(
     service_status: str,
     provider_info: str | None = None,
     purchases_url: str,
+    manage_url: str | None = None,
 ) -> str:
+    # manage_url is intentionally ignored — customer Manage CTAs were retired.
+    _ = manage_url
     payment_line = (
         f"<p><strong>Razorpay Payment ID:</strong> {_esc(razorpay_payment_id)}</p>"
         if razorpay_payment_id
@@ -1595,6 +1598,74 @@ def technology_purchase_confirmation_email_template(
                 <p>Your service has been successfully activated through Deltapreneur.</p>
                 <a href="{_esc(purchases_url)}" style="display:inline-block;padding:12px 20px;background:#7c3aed;color:white;text-decoration:none;border-radius:6px;">View My Purchase</a>
                 <p>If the button does not work: <a href="{_esc(purchases_url)}">{_esc(purchases_url)}</a></p>
+                <p>Thank you for choosing Deltapreneur.</p>
+            </div>
+        </body>
+    </html>
+    """
+
+
+def technology_service_access_email_template(
+    *,
+    customer_name: str,
+    service_name: str,
+    plan_name: str,
+    billing_cycle: str,
+    service_status: str,
+    access_fields: list[dict[str, str]],
+    access_url: str | None = None,
+    activated_at: str | None = None,
+    purchase_date: str | None = None,
+) -> str:
+    billing_label = "Monthly" if billing_cycle.lower().startswith("mon") else "Annually" if billing_cycle.lower().startswith("ann") else billing_cycle.title()
+    activation_line = (
+        f"<p><strong>Activated:</strong> {_esc(activated_at)}</p>"
+        if activated_at
+        else ""
+    )
+    purchase_line = (
+        f"<p><strong>Purchase Date:</strong> {_esc(purchase_date)}</p>"
+        if purchase_date
+        else ""
+    )
+    rows = "".join(
+        f"""
+                    <p style="margin:0 0 10px;">
+                        <strong>{_esc(field.get("label"))}:</strong>
+                        <span style="font-family:Consolas,Menlo,ui-monospace,monospace;word-break:break-word;">{_esc(field.get("value"))}</span>
+                    </p>
+        """
+        for field in access_fields
+    )
+    button = (
+        f"""
+                <p><strong>Login URL:</strong> <a href="{_esc(access_url)}">{_esc(access_url)}</a></p>
+                <a href="{_esc(access_url)}" style="display:inline-block;padding:12px 20px;background:#16a34a;color:white;text-decoration:none;border-radius:6px;">Open login page</a>
+                <p>If the button does not work: <a href="{_esc(access_url)}">{_esc(access_url)}</a></p>
+        """
+        if access_url
+        else "<p>A login page URL was not included with this service. Use the access details above. If you need help signing in, contact support@deltapreneur.com.</p>"
+    )
+    return f"""
+    <html>
+        <body style="font-family: Arial, sans-serif;">
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                <h2 style="color: #16a34a;">Your {_esc(service_name)} is ready</h2>
+                <p>Hi {_esc(customer_name)},</p>
+                <p>Your <strong>{_esc(service_name)}</strong> service is active. Use the access information below to sign in or activate your service.</p>
+                <div style="background:#f4f4f4; padding:15px; border-radius:8px; margin:20px 0;">
+                    <p><strong>Service:</strong> {_esc(service_name)}</p>
+                    <p><strong>Plan:</strong> {_esc(plan_name)}</p>
+                    <p><strong>Billing:</strong> {_esc(billing_label)}</p>
+                    <p><strong>Status:</strong> {_esc(service_status)}</p>
+                    {activation_line}
+                    {purchase_line}
+                </div>
+                <div style="background:#ecfdf5; border:1px solid #bbf7d0; padding:15px; border-radius:8px; margin:20px 0;">
+                    {rows}
+                </div>
+                {button}
+                <p>For help, reply to this email or contact support@deltapreneur.com.</p>
                 <p>Thank you for choosing Deltapreneur.</p>
             </div>
         </body>

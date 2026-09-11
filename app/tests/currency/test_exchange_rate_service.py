@@ -9,6 +9,7 @@ from app.service.currency.exchange_rate_service import (
     _merge_consumer_rates,
     convert_foreign_to_inr,
     convert_inr,
+    get_exchange_rates,
 )
 
 
@@ -64,6 +65,45 @@ def test_convert_foreign_to_inr_round_trip(monkeypatch):
 
     back = convert_foreign_to_inr(100, "USD")
     assert back["amountInr"] == 10000
+
+
+def test_get_exchange_rates_uses_static_fallback_when_live_providers_fail(monkeypatch):
+    import app.service.currency.exchange_rate_service as fx
+
+    monkeypatch.setattr(fx, "_cache_rates", None)
+    monkeypatch.setattr(fx, "_cache_updated_at", 0.0)
+    monkeypatch.setattr(fx, "_cache_source_unix", None)
+    monkeypatch.setattr(fx, "_cache_providers", None)
+    monkeypatch.setattr(
+        fx,
+        "_fetch_live_rates",
+        lambda: (_ for _ in ()).throw(RuntimeError("All exchange rate providers failed")),
+    )
+
+    snapshot = get_exchange_rates(force_refresh=True)
+
+    assert snapshot["fallback"] is True
+    assert snapshot["stale"] is True
+    assert snapshot["rates"]["USD"] == pytest.approx(0.0105)
+
+
+def test_convert_foreign_to_inr_uses_static_fallback_when_live_providers_fail(monkeypatch):
+    import app.service.currency.exchange_rate_service as fx
+
+    monkeypatch.setattr(fx, "_cache_rates", None)
+    monkeypatch.setattr(fx, "_cache_updated_at", 0.0)
+    monkeypatch.setattr(fx, "_cache_source_unix", None)
+    monkeypatch.setattr(fx, "_cache_providers", None)
+    monkeypatch.setattr(
+        fx,
+        "_fetch_live_rates",
+        lambda: (_ for _ in ()).throw(RuntimeError("All exchange rate providers failed")),
+    )
+
+    back = convert_foreign_to_inr(49, "USD")
+
+    assert back["amountInr"] == 4667
+    assert back["rate"] == pytest.approx(0.0105)
 
 
 def test_supported_currencies_include_aed_not_jpy():

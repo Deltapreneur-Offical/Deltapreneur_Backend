@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+from sqlalchemy import or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -14,6 +15,7 @@ from app.repository.software_purchase_repository import SoftwarePurchaseReposito
 from app.entity.cocreation.software_entity import Software
 from app.entity.cocreation.technology_pricing_plan_entity import TechnologyPricingPlan
 from app.entity.coventure.agreement_entity import Agreement
+from app.entity.platform.track_record_entity import TrackRecord
 from app.entity.user.app_user import AppUser
 from app.entity.user.user_role import UserRole
 from app.model.cocreation.cocreation_request import CreateSoftwareRequest, UpdateSoftwareRequest
@@ -21,6 +23,8 @@ from app.repository.software_auction_repository import SoftwareAuctionRepository
 from app.repository.software_repository import SoftwareRepository
 from app.service.platform.listing_pricing_service import ListingPricingService
 from app.service.cocreation.software_auction_service import SoftwareAuctionService
+from app.service.technology.technology_purchase_status import customer_activation_view
+from app.service.technology.provider_access import public_purchase_access_fields
 from app.service.currency.exchange_rate_service import convert_foreign_to_inr
 from app.utils.cocreation_enums import (
     SoftwareAuctionApprovalStatus,
@@ -50,6 +54,70 @@ def _to_stored_inr(amount: float, currency: str) -> float:
             f"Could not convert {code} price to INR for listing storage.",
             status_code=400,
         ) from exc
+
+
+def _money_or_none(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        return round(float(value), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _infer_gst_rate(subtotal: float | None, gst: float | None) -> float | None:
+    if subtotal is None or gst is None or subtotal <= 0 or gst <= 0:
+        return None
+    return round((gst / subtotal) * 100, 2)
+
+
+def _technology_invoice_amounts(sub, track: TrackRecord | None) -> dict:
+    subtotal = _money_or_none(getattr(track, "subtotal_ex_gst", None))
+    gst = _money_or_none(getattr(track, "gst_amount", None))
+    total = _money_or_none(getattr(track, "amount_charged", None))
+
+    if total is None or total <= 0:
+        total = _money_or_none(getattr(sub, "price", None)) or 0.0
+    if subtotal is None:
+        subtotal = (
+            round(total - gst, 2)
+            if gst is not None and gst > 0 and total > gst
+            else _money_or_none(getattr(sub, "price", None))
+        )
+
+    return {
+        "grossAmountInr": total,
+        "amountCharged": total,
+        "subtotalExGst": subtotal,
+        "gstAmount": gst,
+        "gstRate": _infer_gst_rate(subtotal, gst),
+        "taxSource": "track_records" if track is not None else "technology_subscriptions",
+    }
+
+
+def _matching_technology_track(sub, records: list[TrackRecord]) -> TrackRecord | None:
+    by_payment = [
+        rec for rec in records
+        if sub.razorpay_payment_id and rec.razorpay_payment_id == sub.razorpay_payment_id
+    ]
+    by_order = [
+        rec for rec in records
+        if sub.razorpay_order_id and rec.razorpay_order_id == sub.razorpay_order_id
+    ]
+    candidates = by_payment or by_order
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+
+    name = str(sub.service_name or "").strip().lower()
+    slug = str(sub.service_slug or "").strip().lower()
+    for rec in candidates:
+        item_name = str(rec.item_name or "").strip().lower()
+        item_id = str(rec.item_id or "").strip().lower()
+        if (name and item_name == name) or (slug and item_id == slug):
+            return rec
+    return candidates[0]
 
 
 def _can_manage_software(software: Software, actor: AppUser) -> bool:
@@ -112,6 +180,7 @@ class CocreationService:
 
     async def list_my_purchases(self, user: AppUser) -> list:
         from app.model.cocreation.purchase_mapper import build_purchase_response
+        from app.entity.technology_services.technology_subscription_invoice_entity import TechnologySubscriptionInvoiceEntity
         from app.entity.technology_services.technology_subscription_entity import TechnologySubscriptionEntity
         from sqlalchemy import select as sa_select
 
@@ -130,7 +199,49 @@ class CocreationService:
         res = await self._session.execute(stmt)
         tech_subs = res.scalars().all()
 
+        invoice_by_subscription: dict[str, TechnologySubscriptionInvoiceEntity] = {}
+        if tech_subs:
+            subscription_ids = [str(sub.id) for sub in tech_subs]
+            invoice_stmt = (
+                sa_select(TechnologySubscriptionInvoiceEntity)
+                .where(TechnologySubscriptionInvoiceEntity.subscription_id.in_(subscription_ids))
+                .order_by(TechnologySubscriptionInvoiceEntity.created_at.desc())
+            )
+            invoice_res = await self._session.execute(invoice_stmt)
+            for invoice in invoice_res.scalars().all():
+                invoice_by_subscription.setdefault(str(invoice.subscription_id), invoice)
+
+        track_records: list[TrackRecord] = []
+        if tech_subs:
+            payment_ids = [
+                sub.razorpay_payment_id
+                for sub in tech_subs
+                if sub.razorpay_payment_id
+            ]
+            order_ids = [
+                sub.razorpay_order_id
+                for sub in tech_subs
+                if sub.razorpay_order_id
+            ]
+            filters = []
+            if payment_ids:
+                filters.append(TrackRecord.razorpay_payment_id.in_(payment_ids))
+            if order_ids:
+                filters.append(TrackRecord.razorpay_order_id.in_(order_ids))
+            if filters:
+                track_stmt = sa_select(TrackRecord).where(
+                    TrackRecord.category == "Technology Services",
+                    TrackRecord.buyer_user_id == user.id,
+                    or_(*filters),
+                )
+                track_res = await self._session.execute(track_stmt)
+                track_records = list(track_res.scalars().all())
+
         for sub in tech_subs:
+            track = _matching_technology_track(sub, track_records)
+            invoice_amounts = _technology_invoice_amounts(sub, track)
+            invoice = invoice_by_subscription.get(str(sub.id))
+            activation = customer_activation_view(sub)
             result.append({
                 "id": str(sub.id),
                 "softwareId": str(sub.id),
@@ -138,20 +249,25 @@ class CocreationService:
                 "buyerFullName": None,
                 "buyerEmail": None,
                 "buyerPhone": None,
-                "paymentStatus": "COMPLETED",
-                "completionStatus": "ACTIVE" if sub.status == "ACTIVE" else "PENDING",
+                "isTechnologyService": True,
+                **activation,
+                **public_purchase_access_fields(sub),
                 "selectedPlan": sub.plan_code,
                 "expiryDate": sub.current_period_end.isoformat() if sub.current_period_end else None,
                 "coBrotherOptIn": False,
                 "coBrotherHelpPaid": False,
-                "grossAmountInr": float(sub.price or 0),
+                **invoice_amounts,
                 "soldAt": sub.current_period_start.isoformat() if sub.current_period_start else None,
                 "createdAt": sub.created_at.isoformat() if sub.created_at else None,
+                "razorpayOrderId": sub.razorpay_order_id,
+                "razorpayPaymentId": sub.razorpay_payment_id,
+                "invoiceNumber": invoice.invoice_number if invoice else None,
+                "taxInvoiceNumber": invoice.invoice_number if invoice else None,
                 "software": {
                     "name": sub.service_name,
                     "category": "Technology",
                     "technologyType": "SOFTWARE",
-                    "price": sub.price,
+                    "price": invoice_amounts.get("subtotalExGst") or sub.price,
                     "githubLink": None,
                     "demoUrl": None,
                 },

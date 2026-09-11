@@ -67,11 +67,11 @@ class Settings(BaseSettings):
 
     MAIL_FROM_NAME: str
 
-    # Display From for transactional mail (e.g. no-reply@hubregistrar.com). Replies go to MAIL_REPLY_TO.
+    # Display From for transactional mail (e.g. support@deltapreneur.com). Replies go to MAIL_REPLY_TO.
     MAIL_REPLY_TO: str = "support@deltapreneur.com"
 
     # Optional From for domain registration lifecycle emails (active / DNS / RAA).
-    # Empty = use MAIL_FROM. Example: domains@hubregistrar.com (requires SMTP send-as / Workspace).
+    # Empty = use MAIL_FROM. Example: domains@deltapreneur.com (requires SMTP send-as / Workspace).
     MAIL_DOMAINS_FROM: str = ""
     # Optional SMTP login for domain emails. Empty = reuse MAIL_USERNAME / MAIL_PASSWORD.
     MAIL_DOMAINS_USERNAME: str = ""

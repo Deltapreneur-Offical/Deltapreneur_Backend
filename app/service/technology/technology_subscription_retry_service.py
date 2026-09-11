@@ -24,7 +24,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -46,6 +46,15 @@ from app.service.resellportal.product_mapper import (
     is_provider_mapped,
     validate_order_input,
 )
+from app.service.technology.provider_access import (
+    access_email_payload,
+    confirmation_email_kwargs,
+    customer_display_name,
+    extract_provider_credentials,
+    real_provider_service_id,
+    store_subscription_credentials,
+)
+from app.service.technology.technology_purchase_status import retry_result_payload
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +62,10 @@ logger = logging.getLogger(__name__)
 BACKOFF_MINUTES = (5, 15, 60, 360, 1440)  # 5m, 15m, 1h, 6h, 24h
 
 # Subscription statuses the worker may retry.
-RETRYABLE_STATUSES = ("PENDING", "PROVISIONING_FAILED")
+# Subscription statuses the worker may retry. PAYMENT_CAPTURED / PROVISIONING
+# are included so a crash after payment persist but before status update cannot
+# strand a captured payment outside the retry loop.
+RETRYABLE_STATUSES = ("PENDING", "PROVISIONING_FAILED", "PAYMENT_CAPTURED", "PROVISIONING")
 
 
 def _backoff_delay(attempt_number: int) -> timedelta:
@@ -83,18 +95,29 @@ class TechnologySubscriptionRetryService:
 
     async def run_tick(self) -> dict[str, int]:
         """Scan and process due subscriptions. Returns stats for logging."""
-        stats = {"processed": 0, "adopted": 0, "activated": 0, "pending": 0, "failed": 0, "needs_input": 0}
+        stats = {"processed": 0, "adopted": 0, "activated": 0, "pending": 0, "failed": 0, "needs_input": 0, "email": 0, "email_failed": 0, "access": 0, "access_failed": 0, "already_active": 0}
         now = datetime.now(timezone.utc)
         stmt = (
             select(TechnologySubscriptionEntity)
             .where(
-                TechnologySubscriptionEntity.status.in_(RETRYABLE_STATUSES),
                 TechnologySubscriptionEntity.payment_status == PaymentStatus.CAPTURED,
                 TechnologySubscriptionEntity.is_deleted.is_(False),
-                TechnologySubscriptionEntity.provision_attempts < self._max_retries,
-                (
-                    TechnologySubscriptionEntity.next_retry_at.is_(None)
-                    | (TechnologySubscriptionEntity.next_retry_at <= now)
+                or_(
+                    and_(
+                        TechnologySubscriptionEntity.status.in_(RETRYABLE_STATUSES),
+                        TechnologySubscriptionEntity.provision_attempts < self._max_retries,
+                        (
+                            TechnologySubscriptionEntity.next_retry_at.is_(None)
+                            | (TechnologySubscriptionEntity.next_retry_at <= now)
+                        ),
+                    ),
+                    and_(
+                        TechnologySubscriptionEntity.status == "ACTIVE",
+                        or_(
+                            TechnologySubscriptionEntity.confirmation_sent.is_(False),
+                            TechnologySubscriptionEntity.access_email_sent.is_(False),
+                        ),
+                    ),
                 ),
             )
             .order_by(TechnologySubscriptionEntity.created_at.asc())
@@ -132,21 +155,42 @@ class TechnologySubscriptionRetryService:
         if sub is None:
             return {"success": False, "error": "Subscription not found"}
 
-        if sub.status == "ACTIVE":
-            return {"success": False, "error": "Subscription is already active"}
+        if bool(getattr(sub, "is_deleted", False)):
+            return retry_result_payload(sub, "failed", error="Subscription is deleted")
 
         if sub.payment_status != PaymentStatus.CAPTURED:
-            return {"success": False, "error": "Subscription is not paid; refusing to provision"}
+            return retry_result_payload(
+                sub, "failed", error="Subscription is not paid; refusing to provision"
+            )
+
+        if sub.status == "ACTIVE":
+            user = await self._user_for(sub.user_id)
+            user_email = user.email if user is not None else sub.user_id
+            confirmation_missing = not bool(sub.confirmation_sent)
+            email_ok = await self._send_confirmation_email(sub, user_email)
+            access_result = await self._send_access_email(sub, user_email, user=user)
+            await self._session.commit()
+            if confirmation_missing:
+                if email_ok and sub.confirmation_sent:
+                    return retry_result_payload(sub, "email")
+                return retry_result_payload(sub, "email_failed")
+            if access_result is True:
+                return retry_result_payload(sub, "access")
+            if access_result is False:
+                return retry_result_payload(sub, "access_failed")
+            return retry_result_payload(sub, "already_active")
 
         if not force and sub.provision_attempts >= self._max_retries:
-            return {"success": False, "error": "Automatic retry limit reached; needs review"}
+            return retry_result_payload(
+                sub, "failed", error="Automatic retry limit reached; needs review"
+            )
 
-        # Reset the schedule for a manual retry.
+        # Reset the schedule for a manual retry. Never charge Razorpay.
         sub.next_retry_at = datetime.now(timezone.utc)
         sub.needs_review = False
         outcome = await self._process(sub)
         await self._session.commit()
-        return {"success": outcome in ("activated", "pending", "adopted"), "outcome": outcome, "status": sub.status}
+        return retry_result_payload(sub, outcome)
 
     # ------------------------------------------------------------------ #
     # Core processing
@@ -155,6 +199,20 @@ class TechnologySubscriptionRetryService:
     async def _process(self, sub: TechnologySubscriptionEntity) -> str:
         """Process one subscription. Returns a stats outcome label."""
         try:
+            if sub.status == "ACTIVE":
+                user = await self._user_for(sub.user_id)
+                user_email = user.email if user is not None else sub.user_id
+                confirmation_missing = not bool(sub.confirmation_sent)
+                email_sent = await self._send_confirmation_email(sub, user_email)
+                access_result = await self._send_access_email(sub, user_email, user=user)
+                if confirmation_missing:
+                    return "email" if email_sent else "email_failed"
+                if access_result is True:
+                    return "access"
+                if access_result is False:
+                    return "access_failed"
+                return "already_active"
+
             # 1. Resolve the service and confirm provider mapping.
             service = await self._service_for(sub.service_slug)
             product_key = None
@@ -229,15 +287,29 @@ class TechnologySubscriptionRetryService:
             sub.last_provider_error = str(prov_res.get("error") or "") if not provider_success else None
 
             if provider_success and provider_status == "ACTIVE":
-                return await self._mark_active(sub, prov_res, user_email)
+                if not real_provider_service_id(prov_res, user_id=sub.user_id):
+                    prov_res = {
+                        **prov_res,
+                        "success": False,
+                        "status": "PROVISIONING_PENDING",
+                        "error": "Provider did not return a real service_id.",
+                    }
+                    return await self._mark_pending(sub, prov_res, user_email)
+                return await self._mark_active(sub, prov_res, user_email, user=user)
             if provider_success and provider_status in ("PENDING", "PROVISIONING_PENDING"):
                 return await self._mark_pending(sub, prov_res, user_email)
             return await self._mark_failed(sub, prov_res, user_email)
         except Exception:
             logger.exception("technology.retry.process_failed sub=%s", sub.id)
-            sub.status = "PROVISIONING_FAILED"
             sub.last_provider_error = "Unexpected error during provisioning retry."
-            sub.needs_review = True
+            sub.last_provider_status = "PROVISIONING_PENDING"
+            sub.provision_attempts = max(int(sub.provision_attempts or 0), 1)
+            sub.next_retry_at = self._next_retry(sub)
+            if sub.provision_attempts >= self._max_retries:
+                sub.status = "PROVISIONING_FAILED"
+                sub.needs_review = True
+            else:
+                sub.status = "PENDING"
             await self._session.flush()
             return "failed"
 
@@ -245,11 +317,13 @@ class TechnologySubscriptionRetryService:
     # Outcome handlers
     # ------------------------------------------------------------------ #
 
-    async def _mark_active(self, sub, prov_res, user_email: str) -> str:
+    async def _mark_active(self, sub, prov_res, user_email: str, *, user: Any = None) -> str:
         sub.status = "ACTIVE"
         sub.provider_order_id = prov_res.get("provider_order_id") or sub.provider_order_id
-        sub.provider_subscription_id = prov_res.get("provider_subscription_id") or sub.provider_subscription_id
-        sub.credentials_json = json.dumps(prov_res.get("credentials") or {})
+        sub.provider_subscription_id = (
+            real_provider_service_id(prov_res, user_id=sub.user_id) or sub.provider_subscription_id
+        )
+        store_subscription_credentials(sub, prov_res.get("credentials") or {})
         start, end = prov_res.get("current_period_start"), prov_res.get("current_period_end")
         if start is None or end is None:
             start, end = _sub_periods(sub.billing_cycle)
@@ -261,14 +335,17 @@ class TechnologySubscriptionRetryService:
         await self._session.flush()
         await self._update_track(sub, FulfillmentStatus.PROVISIONED, OverallStatus.SUCCESS)
         await self._send_confirmation_email(sub, user_email)
+        await self._send_access_email(sub, user_email, user=user)
         return "activated"
 
     async def _mark_pending(self, sub, prov_res, user_email: str) -> str:
         sub.status = "PENDING"
         sub.provider_order_id = prov_res.get("provider_order_id") or sub.provider_order_id
-        sub.provider_subscription_id = prov_res.get("provider_subscription_id") or sub.provider_subscription_id
+        mapped_service_id = real_provider_service_id(prov_res, user_id=sub.user_id)
+        if mapped_service_id:
+            sub.provider_subscription_id = mapped_service_id
         if prov_res.get("credentials"):
-            sub.credentials_json = json.dumps(prov_res.get("credentials"))
+            store_subscription_credentials(sub, prov_res.get("credentials"))
         sub.next_retry_at = self._next_retry(sub)
         await self._session.flush()
         await self._update_track(sub, FulfillmentStatus.IN_PROGRESS, OverallStatus.PENDING)
@@ -276,31 +353,43 @@ class TechnologySubscriptionRetryService:
         return "pending"
 
     async def _mark_failed(self, sub, prov_res, user_email: str) -> str:
-        sub.status = "PROVISIONING_FAILED"
         sub.last_provider_error = str(
             prov_res.get("error") or prov_res.get("message") or "Provider provisioning failed."
         )
+        sub.last_provider_status = "PROVISIONING_PENDING"
         sub.next_retry_at = self._next_retry(sub)
+        terminal = sub.provision_attempts >= self._max_retries
+        if terminal:
+            sub.status = "PROVISIONING_FAILED"
+            sub.needs_review = True
+        else:
+            sub.status = "PENDING"
         await self._session.flush()
         await self._update_track(
             sub,
-            FulfillmentStatus.FAILED,
-            OverallStatus.FAILED,
+            FulfillmentStatus.IN_PROGRESS,
+            OverallStatus.PENDING,
             error_code="PROVISIONING_ERROR",
             error_message=sub.last_provider_error,
         )
-        await self._send_failed_email(sub, user_email)
-        return "failed"
+        if terminal:
+            await self._send_failed_email(sub, user_email)
+            return "failed"
+        await self._send_pending_email(sub, user_email, needs_input=False)
+        return "pending"
 
     async def _adopt_existing_order(self, sub, existing: dict[str, Any], user_email: str) -> str:
         """Adopt an existing provider order — never create a duplicate."""
         sub.provider_order_id = existing.get("provider_order_id") or existing.get("order_id") or sub.provider_order_id
         sub.provider_subscription_id = (
-            existing.get("provider_subscription_id") or existing.get("subscription_id") or sub.provider_subscription_id
+            real_provider_service_id(existing, user_id=sub.user_id) or sub.provider_subscription_id
         )
+        adopted_creds = extract_provider_credentials(existing)
+        if adopted_creds:
+            store_subscription_credentials(sub, adopted_creds)
         provider_status = str(existing.get("status") or "PENDING").upper()
         sub.last_provider_status = provider_status
-        if provider_status == "ACTIVE":
+        if provider_status == "ACTIVE" and sub.provider_subscription_id:
             sub.status = "ACTIVE"
             sub.next_retry_at = None
             sub.needs_review = False
@@ -309,7 +398,9 @@ class TechnologySubscriptionRetryService:
                 sub.current_period_start, sub.current_period_end = _sub_periods(sub.billing_cycle)
             await self._session.flush()
             await self._update_track(sub, FulfillmentStatus.PROVISIONED, OverallStatus.SUCCESS)
+            user = await self._user_for(sub.user_id)
             await self._send_confirmation_email(sub, user_email)
+            await self._send_access_email(sub, user_email, user=user)
             return "adopted"
         # Provider order exists but is not active yet.
         sub.status = "PENDING"
@@ -408,9 +499,9 @@ class TechnologySubscriptionRetryService:
         except Exception:
             logger.exception("technology.retry.track_update_failed sub=%s", sub.id)
 
-    async def _send_confirmation_email(self, sub, user_email: str) -> None:
+    async def _send_confirmation_email(self, sub, user_email: str) -> bool:
         if sub.confirmation_sent:
-            return
+            return True
         try:
             plan_name = sub.plan_code.replace("_", " ").title()
             await MailService.send_technology_purchase_confirmation_email(
@@ -425,15 +516,49 @@ class TechnologySubscriptionRetryService:
                 purchase_date=datetime.now(timezone.utc).strftime("%d %b %Y"),
                 service_status="Active",
                 provider_info=(
-                    f"Service ID: {sub.provider_subscription_id or sub.provider_order_id or 'N/A'}"
+                    f"Service ID: {sub.provider_subscription_id or 'N/A'}"
                 ),
                 purchases_url=f"{settings.FRONTEND_BASE_URL.rstrip('/')}/purchases",
+                **confirmation_email_kwargs(sub),
             )
             sub.email_sent = True
             sub.confirmation_sent = True
+            if str(sub.last_provider_error or "").startswith(
+                "Activation succeeded; confirmation email"
+            ):
+                sub.last_provider_error = None
             await self._session.flush()
+            return True
         except Exception:
             logger.exception("technology.retry.confirmation_email.failed sub=%s", sub.id)
+            if str(getattr(sub, "status", "") or "").upper() == "ACTIVE":
+                sub.last_provider_error = (
+                    "Activation succeeded; confirmation email could not be sent."
+                )
+                await self._session.flush()
+            return False
+
+    async def _send_access_email(self, sub, user_email: str, *, user: Any = None) -> Optional[bool]:
+        payload = access_email_payload(
+            sub,
+            customer_name=customer_display_name(user) or user_email,
+        )
+        if payload is None:
+            return None
+        try:
+            await MailService.send_technology_service_access_email(
+                to_email=user_email,
+                **payload,
+            )
+            sub.access_email_sent = True
+            sub.access_email_status = "SENT"
+            await self._session.flush()
+            return True
+        except Exception:
+            logger.exception("technology.retry.access_email.failed sub=%s", sub.id)
+            sub.access_email_status = "FAILED"
+            await self._session.flush()
+            return False
 
     async def _send_pending_email(self, sub, user_email: str, *, needs_input: bool) -> None:
         if sub.email_sent:

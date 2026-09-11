@@ -59,6 +59,7 @@ SQLAlchemy==2.0.40
 starlette==0.46.2
 typing-inspection==0.4.2
 typing_extensions==4.15.0
+truststore==0.10.4
 urllib3==2.7.0
 uvicorn==0.34.2
 websockets==15.0.1

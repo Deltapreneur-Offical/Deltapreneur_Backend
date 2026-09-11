@@ -8,6 +8,7 @@ import logging
 import time
 from typing import Any, Optional
 
+import certifi
 import razorpay
 from razorpay.errors import BadRequestError
 from requests.exceptions import ConnectionError, Timeout
@@ -15,6 +16,11 @@ from requests.exceptions import ConnectionError, Timeout
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+try:  # pragma: no cover - availability depends on the local Python install
+    import truststore
+except ImportError:  # pragma: no cover
+    truststore = None
 
 
 def _key_id() -> str:
@@ -35,6 +41,20 @@ def is_configured() -> bool:
 
 def get_key_id() -> str:
     return _key_id()
+
+
+def create_client() -> razorpay.Client:
+    client = razorpay.Client(auth=(_key_id(), _key_secret()))
+    if truststore is not None:
+        # Use the OS trust store when available; this keeps TLS verification on
+        # while supporting Windows machines that rely on locally trusted roots.
+        truststore.inject_into_ssl()
+        client.cert_path = True
+    else:
+        # Razorpay's bundled ca-bundle.crt can lag behind current public roots on
+        # some Python installs. Use certifi's maintained bundle instead.
+        client.cert_path = certifi.where()
+    return client
 
 
 def is_test_mode() -> bool:
@@ -129,7 +149,7 @@ def create_order(
             "or continue via Add to Cart / assisted purchase."
         )
 
-    client = razorpay.Client(auth=(_key_id(), _key_secret()))
+    client = create_client()
     payload: dict[str, Any] = {
         "amount": _to_smallest_unit(amount_inr, currency),
         "currency": currency.upper(),
@@ -207,14 +227,14 @@ def verify_webhook_signature(body: bytes, signature_header: str) -> bool:
 def fetch_payment(payment_id: str) -> dict[str, Any]:
     if not is_configured():
         raise RuntimeError("Razorpay is not configured.")
-    client = razorpay.Client(auth=(_key_id(), _key_secret()))
+    client = create_client()
     return dict(client.payment.fetch(payment_id))
 
 
 def fetch_order(order_id: str) -> dict[str, Any]:
     if not is_configured():
         raise RuntimeError("Razorpay is not configured.")
-    client = razorpay.Client(auth=(_key_id(), _key_secret()))
+    client = create_client()
     return dict(client.order.fetch(order_id))
 
 
@@ -331,7 +351,7 @@ def refund_payment(
     if not is_configured():
         raise RuntimeError("Razorpay is not configured.")
 
-    client_obj = razorpay.Client(auth=(_key_id(), _key_secret()))
+    client_obj = create_client()
 
     # --- Fetch the actual payment from Razorpay ---
     try:
@@ -420,7 +440,7 @@ def fetch_recent_payments(count: int = 50) -> list[dict[str, Any]]:
     if not is_configured():
         return []
     try:
-        client = razorpay.Client(auth=(_key_id(), _key_secret()))
+        client = create_client()
         res = client.payment.all({"count": count})
         items = res.get("items") or []
         return [dict(i) for i in items]

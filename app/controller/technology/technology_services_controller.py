@@ -14,7 +14,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -22,16 +22,84 @@ from sqlalchemy.orm import Session
 from app.controller.auth.auth_controller import get_current_user
 from app.core.config import settings
 from app.core.database import get_async_db, get_db
+from app.core.dependencies import require_role
 from app.entity.technology_services.technology_service_entity import TechnologyServiceEntity
 from app.entity.technology_services.technology_subscription_entity import TechnologySubscriptionEntity
 from app.entity.technology_services.technology_subscription_invoice_entity import TechnologySubscriptionInvoiceEntity
+from app.entity.platform.track_record_entity import TrackRecord
+from app.entity.user.app_user import AppUser
 from app.integrations.resellportal.client import get_resellportal_client
 from app.service.auth.mail_service import MailService
+from app.service.auth.smtp_diagnostics import (
+    local_runtime_context,
+    run_smtp_connectivity_test,
+    safe_mail_config_diagnostic,
+)
 from app.service.resellportal.product_mapper import build_order_parameters, get_product_key, is_provider_mapped
+from app.service.technology.provider_access import (
+    access_email_payload,
+    confirmation_email_kwargs,
+    deliver_admin_access_email,
+    filter_admin_subscriptions_by_email,
+    load_provider_credentials,
+    real_provider_service_id,
+    serialize_admin_access_details,
+    serialize_admin_subscription_list_item,
+    serialize_customer_subscription,
+    store_subscription_credentials,
+)
+from app.service.technology.technology_purchase_status import (
+    RETRYABLE_PROVISIONING_STATUSES,
+    is_failed_provisioning_queue_item,
+    serialize_failed_provisioning_item,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/technology-services", tags=["Technology Services"])
+
+
+def _money_or_none(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        return round(float(value), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _infer_gst_rate(subtotal: float | None, gst: float | None) -> float | None:
+    if subtotal is None or gst is None or subtotal <= 0 or gst <= 0:
+        return None
+    return round((gst / subtotal) * 100, 2)
+
+
+def _invoice_amount_payload(*, subscription, invoice, track: TrackRecord | None) -> dict[str, Any]:
+    subtotal = _money_or_none(getattr(track, "subtotal_ex_gst", None))
+    gst = _money_or_none(getattr(track, "gst_amount", None))
+    total = _money_or_none(getattr(track, "amount_charged", None))
+
+    if total is None or total <= 0:
+        total = _money_or_none(getattr(invoice, "amount", None))
+    if subtotal is None:
+        subtotal = (
+            round(total - gst, 2)
+            if total is not None and gst is not None and gst > 0 and total > gst
+            else _money_or_none(getattr(subscription, "price", None))
+        )
+
+    return {
+        "amount": total,
+        "total_amount": total,
+        "totalAmount": total,
+        "subtotal_ex_gst": subtotal,
+        "subtotalExGst": subtotal,
+        "gst_amount": gst,
+        "gstAmount": gst,
+        "gst_rate": _infer_gst_rate(subtotal, gst),
+        "gstRate": _infer_gst_rate(subtotal, gst),
+        "tax_source": "track_records" if track is not None else "technology_subscription_invoices",
+    }
 
 
 # -------------------------------------------------------------------
@@ -64,6 +132,13 @@ class AdminToggleService(BaseModel):
 class AdminPriceOverride(BaseModel):
     price_override_monthly: Optional[float] = Field(None, description="Custom monthly price override")
     price_override_annually: Optional[float] = Field(None, description="Custom annual price override")
+
+
+class MailDiagnosticSendRequest(BaseModel):
+    to_email: Optional[str] = Field(
+        default=None,
+        description="Controlled recipient for one SMTP diagnostic email. Defaults to MAIL_REPLY_TO.",
+    )
 
 
 # -------------------------------------------------------------------
@@ -735,7 +810,8 @@ async def subscribe_technology_service(
 
     provider_success = prov_res.get("success") is True
     provider_status = str(prov_res.get("status") or "PENDING").upper()
-    subscription_status = "ACTIVE" if provider_success and provider_status == "ACTIVE" else "PENDING"
+    provider_service_id = real_provider_service_id(prov_res, user_id=user_id)
+    subscription_status = "ACTIVE" if provider_success and provider_status == "ACTIVE" and provider_service_id else "PENDING"
 
     price = selected_plan["price_annually"] if payload.billing_cycle == "annually" else selected_plan["price_monthly"]
 
@@ -748,14 +824,15 @@ async def subscribe_technology_service(
         price=price,
         currency="USD",
         status=subscription_status,
-        provider_subscription_id=prov_res.get("provider_subscription_id"),
+        provider_subscription_id=provider_service_id,
         provider_order_id=prov_res.get("provider_order_id"),
-        credentials_json=json.dumps(prov_res.get("credentials") or {}),
+        credentials_json=None,
         current_period_start=prov_res.get("current_period_start"),
         current_period_end=prov_res.get("current_period_end"),
         auto_renew=True,
         email_sent=False,
     )
+    store_subscription_credentials(sub, prov_res.get("credentials") or {})
     db.add(sub)
     await db.flush()
 
@@ -792,14 +869,33 @@ async def subscribe_technology_service(
                 amount_inr=float(price),
                 purchase_date=purchase_date,
                 service_status="Active",
-                provider_info=f"Service ID: {prov_res.get('service_id', 'N/A')}",
+                provider_info=f"Service ID: {provider_service_id or 'N/A'}",
                 purchases_url=purchases_url,
+                **confirmation_email_kwargs(sub),
             )
             sub.email_sent = True
+            sub.confirmation_sent = True
             await db.flush()
             await db.commit()
         except Exception:
             logger.exception("technology.subscribe.confirmation_email.failed user=%s service=%s", user_id, service.slug)
+    if subscription_status == "ACTIVE" and not getattr(sub, "access_email_sent", False):
+        access_payload = access_email_payload(sub, customer_name=customer_name)
+        if access_payload is not None:
+            try:
+                await MailService.send_technology_service_access_email(
+                    to_email=user_email,
+                    **access_payload,
+                )
+                sub.access_email_sent = True
+                sub.access_email_status = "SENT"
+                await db.flush()
+                await db.commit()
+            except Exception:
+                sub.access_email_status = "FAILED"
+                await db.flush()
+                await db.commit()
+                logger.exception("technology.subscribe.access_email.failed user=%s service=%s", user_id, service.slug)
     elif subscription_status == "PENDING" and not sub.email_sent:
         try:
             await MailService.send_technology_purchase_pending_email(
@@ -822,13 +918,13 @@ async def subscribe_technology_service(
             logger.exception("technology.subscribe.pending_email.failed user=%s service=%s", user_id, service.slug)
 
     return {
-        "success": provider_success,
+        "success": provider_success and subscription_status == "ACTIVE",
         "subscription_id": str(sub.id),
         "service_name": sub.service_name,
         "plan_code": sub.plan_code,
         "billing_cycle": sub.billing_cycle,
         "status": sub.status,
-        "credentials": prov_res["credentials"],
+        "credentials": {},
         "invoice_number": inv_number,
     }
 
@@ -845,24 +941,7 @@ def list_my_subscriptions(
         TechnologySubscriptionEntity.is_deleted == False,
     ).order_by(TechnologySubscriptionEntity.created_at.desc()).all()
 
-    result = []
-    for sub in subs:
-        creds = json.loads(sub.credentials_json) if sub.credentials_json else {}
-        result.append({
-            "id": str(sub.id),
-            "service_slug": sub.service_slug,
-            "service_name": sub.service_name,
-            "plan_code": sub.plan_code,
-            "billing_cycle": sub.billing_cycle,
-            "price": sub.price,
-            "currency": sub.currency,
-            "status": sub.status,
-            "credentials": creds,
-            "current_period_start": sub.current_period_start.isoformat() if sub.current_period_start else None,
-            "current_period_end": sub.current_period_end.isoformat() if sub.current_period_end else None,
-            "auto_renew": sub.auto_renew,
-            "created_at": sub.created_at.isoformat() if sub.created_at else None,
-        })
+    result = [serialize_customer_subscription(sub) for sub in subs]
     return result
 
 
@@ -883,21 +962,7 @@ def get_subscription_detail(
     if not sub:
         raise HTTPException(status_code=404, detail="Subscription not found")
 
-    creds = json.loads(sub.credentials_json) if sub.credentials_json else {}
-    return {
-        "id": str(sub.id),
-        "service_slug": sub.service_slug,
-        "service_name": sub.service_name,
-        "plan_code": sub.plan_code,
-        "billing_cycle": sub.billing_cycle,
-        "price": sub.price,
-        "currency": sub.currency,
-        "status": sub.status,
-        "credentials": creds,
-        "current_period_start": sub.current_period_start.isoformat() if sub.current_period_start else None,
-        "current_period_end": sub.current_period_end.isoformat() if sub.current_period_end else None,
-        "auto_renew": sub.auto_renew,
-    }
+    return serialize_customer_subscription(sub)
 
 
 @router.post("/subscriptions/{subscription_id}/renew")
@@ -1015,20 +1080,60 @@ def get_subscription_invoices(
 ) -> list[dict[str, Any]]:
     """Get subscription invoices."""
     user_id = str(current_user.id)
+    sub = db.query(TechnologySubscriptionEntity).filter(
+        TechnologySubscriptionEntity.id == subscription_id,
+        TechnologySubscriptionEntity.user_id == user_id,
+        TechnologySubscriptionEntity.is_deleted == False,
+    ).first()
+    if not sub:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+
     invoices = db.query(TechnologySubscriptionInvoiceEntity).filter(
         TechnologySubscriptionInvoiceEntity.subscription_id == subscription_id,
         TechnologySubscriptionInvoiceEntity.user_id == user_id,
     ).order_by(TechnologySubscriptionInvoiceEntity.created_at.desc()).all()
 
+    track = None
+    track_filters = []
+    if sub.razorpay_payment_id:
+        track_filters.append(TrackRecord.razorpay_payment_id == sub.razorpay_payment_id)
+    if sub.razorpay_order_id:
+        track_filters.append(TrackRecord.razorpay_order_id == sub.razorpay_order_id)
+    if track_filters:
+        candidates = db.query(TrackRecord).filter(
+            TrackRecord.category == "Technology Services",
+            TrackRecord.buyer_user_id == current_user.id,
+            or_(*track_filters),
+        ).order_by(TrackRecord.created_at.desc()).all()
+        if len(candidates) == 1:
+            track = candidates[0]
+        else:
+            service_name = str(sub.service_name or "").strip().lower()
+            service_slug = str(sub.service_slug or "").strip().lower()
+            track = next(
+                (
+                    rec for rec in candidates
+                    if (
+                        service_name
+                        and str(rec.item_name or "").strip().lower() == service_name
+                    )
+                    or (
+                        service_slug
+                        and str(rec.item_id or "").strip().lower() == service_slug
+                    )
+                ),
+                candidates[0] if candidates else None,
+            )
+
     return [
         {
             "id": str(inv.id),
             "invoice_number": inv.invoice_number,
-            "amount": inv.amount,
             "currency": inv.currency,
             "status": inv.status,
             "payment_method": inv.payment_method,
             "created_at": inv.created_at.isoformat() if inv.created_at else None,
+            **_invoice_amount_payload(subscription=sub, invoice=inv, track=track),
         }
         for inv in invoices
     ]
@@ -1051,22 +1156,6 @@ _ADMIN_CONFIG = {
     "wallet_balance": 145.50,
     "warning_threshold": 7.00,
 }
-
-_FAILED_PROVISIONING_ITEMS = [
-    {
-        "id": "failed-201",
-        "user_id": "usr_998877",
-        "user_email": "demo.user@example.com",
-        "service_slug": "ai-business-suite",
-        "service_name": "AI Business Suite",
-        "plan_code": "pro",
-        "billing_cycle": "monthly",
-        "attempted_at": datetime.now(timezone.utc).isoformat(),
-        "error_reason": "Simulated transient timeout during initial provider handshake.",
-        "status": "PENDING_RETRY",
-        "retry_count": 1,
-    }
-]
 
 _PROVISIONING_LOGS = [
     {
@@ -1247,37 +1336,107 @@ def get_admin_wallet() -> dict[str, Any]:
     return client.get_wallet_balance()
 
 
-@router.get("/admin/subscriptions")
-def get_admin_subscriptions(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    """Fetch all customer technology subscriptions for Admin audit."""
+def _users_by_id(db: Session, user_ids: list[Any]) -> dict[str, AppUser]:
+    parsed: list = []
+    for raw in user_ids:
+        try:
+            parsed.append(uuid.UUID(str(raw)))
+        except (TypeError, ValueError):
+            continue
+    if not parsed:
+        return {}
+    users = db.query(AppUser).filter(AppUser.id.in_(parsed)).all()
+    return {str(user.id): user for user in users}
+
+
+def _admin_subscription_payloads(db: Session, *, email: str | None = None) -> list[dict[str, Any]]:
     try:
-        subs = db.query(TechnologySubscriptionEntity).order_by(TechnologySubscriptionEntity.created_at.desc()).all()
-        return [
-            {
-                "id": str(s.id),
-                "user_id": s.user_id,
-                "service_slug": s.service_slug,
-                "service_name": s.service_name,
-                "plan_code": s.plan_code,
-                "billing_cycle": s.billing_cycle,
-                "price": s.price,
-                "currency": s.currency,
-                "status": s.status,
-                "payment_status": s.payment_status,
-                "provider_subscription_id": s.provider_subscription_id,
-                "provider_order_id": s.provider_order_id,
-                "needs_review": s.needs_review,
-                "needs_input": bool(s.last_provider_status == "NEEDS_INPUT"),
-                "last_provider_status": s.last_provider_status,
-                "last_provider_error": s.last_provider_error,
-                "provision_attempts": s.provision_attempts,
-                "next_retry_at": s.next_retry_at.isoformat() if s.next_retry_at else None,
-                "created_at": s.created_at.isoformat() if s.created_at else None,
-            }
-            for s in subs
-        ]
+        subs = db.query(TechnologySubscriptionEntity).order_by(
+            TechnologySubscriptionEntity.created_at.desc()
+        ).all()
     except Exception:
         return []
+    users = _users_by_id(db, [sub.user_id for sub in subs])
+    rows = [
+        serialize_admin_subscription_list_item(sub, user=users.get(str(sub.user_id)))
+        for sub in subs
+    ]
+    return filter_admin_subscriptions_by_email(rows, email)
+
+
+@router.get("/admin/subscriptions")
+def get_admin_subscriptions(
+    email: Optional[str] = Query(None, description="Filter by customer email (substring, case-insensitive)"),
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """Fetch customer technology subscriptions for Admin audit. No credential values."""
+    return _admin_subscription_payloads(db, email=email)
+
+
+@router.get("/admin/subscriptions/{subscription_id}/access-details")
+def get_admin_subscription_access_details(
+    subscription_id: str,
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Admin-only decrypted access fields for a single subscription.
+
+    Explicit retrieval only. List endpoints never include these values.
+    """
+    sub = db.query(TechnologySubscriptionEntity).filter(
+        TechnologySubscriptionEntity.id == subscription_id,
+        TechnologySubscriptionEntity.is_deleted == False,  # noqa: E712
+    ).first()
+    if sub is None:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    users = _users_by_id(db, [sub.user_id])
+    return serialize_admin_access_details(
+        sub,
+        user=users.get(str(sub.user_id)),
+        admin_id=getattr(_admin, "id", None),
+    )
+
+
+@router.post("/admin/subscriptions/{subscription_id}/resend-access-email")
+async def admin_resend_access_email(
+    subscription_id: str,
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Admin-only resend of the existing Technology Service access email.
+
+    Does not provision, charge, or mutate subscription/payment/invoice state.
+    Allowed even when access_email_sent is already true.
+    """
+    sub = db.query(TechnologySubscriptionEntity).filter(
+        TechnologySubscriptionEntity.id == subscription_id,
+        TechnologySubscriptionEntity.is_deleted == False,  # noqa: E712
+    ).first()
+    if sub is None:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+
+    users = _users_by_id(db, [sub.user_id])
+    result = await deliver_admin_access_email(
+        sub,
+        user=users.get(str(sub.user_id)),
+        allow_already_sent=True,
+    )
+
+    if not result.get("success"):
+        error = str(result.get("error") or "Unable to send access email.")
+        if error == "Unable to send access email.":
+            db.commit()
+            raise HTTPException(status_code=502, detail=error)
+        raise HTTPException(status_code=400, detail=error)
+
+    db.commit()
+    return {
+        "success": True,
+        "message": result.get("message") or "Access email sent.",
+        "access_email_status": result.get("access_email_status"),
+        "access_email_sent": True,
+    }
 
 
 @router.get("/admin/subscriptions/needs-review")
@@ -1316,9 +1475,12 @@ def get_admin_subscriptions_needing_review(db: Session = Depends(get_db)) -> lis
 
 
 @router.get("/admin/orders")
-def get_admin_orders(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+def get_admin_orders(
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
     """Fetch customer provisioning order history."""
-    return get_admin_subscriptions(db)
+    return _admin_subscription_payloads(db)
 
 
 @router.get("/admin/renewals")
@@ -1351,42 +1513,65 @@ def get_admin_renewals(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
 
 
 @router.get("/admin/failed-provisioning")
-def get_admin_failed_provisioning() -> list[dict[str, Any]]:
-    """Fetch list of failed provisioning attempts requiring retry."""
-    return list(_FAILED_PROVISIONING_ITEMS)
+def get_admin_failed_provisioning(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+    """Paid technology purchases whose provider activation has not completed.
+
+    Includes CAPTURED + FAILED/PENDING/PROVISIONING rows even when
+    ``provider_order_id`` is NULL — that missing ID is why recovery is needed.
+    """
+    try:
+        subs = (
+            db.query(TechnologySubscriptionEntity)
+            .filter(
+                TechnologySubscriptionEntity.is_deleted.is_(False),
+                TechnologySubscriptionEntity.payment_status == "CAPTURED",
+                TechnologySubscriptionEntity.status.in_(list(RETRYABLE_PROVISIONING_STATUSES)),
+            )
+            .order_by(TechnologySubscriptionEntity.created_at.desc())
+            .all()
+        )
+        subs = [s for s in subs if is_failed_provisioning_queue_item(s)]
+        emails: dict[str, str] = {}
+        user_ids: list = []
+        for sub in subs:
+            try:
+                user_ids.append(uuid.UUID(str(sub.user_id)))
+            except (TypeError, ValueError):
+                continue
+        if user_ids:
+            users = db.query(AppUser).filter(AppUser.id.in_(user_ids)).all()
+            emails = {str(u.id): u.email for u in users if getattr(u, "email", None)}
+        return [
+            serialize_failed_provisioning_item(
+                sub, user_email=emails.get(str(sub.user_id))
+            )
+            for sub in subs
+        ]
+    except Exception:
+        logger.exception("admin.failed_provisioning.query_failed")
+        return []
 
 
 @router.post("/admin/failed-provisioning/{item_id}/retry")
-def retry_failed_provisioning(item_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Retry a failed provisioning attempt."""
-    item = next((i for i in _FAILED_PROVISIONING_ITEMS if i["id"] == item_id), None)
-    if not item:
-        raise HTTPException(status_code=404, detail="Failed provisioning item not found")
+async def retry_failed_provisioning(
+    item_id: str,
+    db: AsyncSession = Depends(get_async_db),
+) -> dict[str, Any]:
+    """Retry provider activation for an existing paid subscription.
 
-    client = get_resellportal_client()
-    prov_res = client.provision_service(
-        service_slug=item["service_slug"],
-        service_name=item["service_name"],
-        plan_code=item["plan_code"],
-        billing_cycle=item["billing_cycle"],
-        user_email=item["user_email"],
-        user_id=item["user_id"],
+    Reconciles ResellPortal with GET /orders first. Never creates a Razorpay
+    payment, local subscription, or invoice. Never marks ACTIVE unless the
+    provider confirms success or an existing matching order is adopted.
+    """
+    from app.service.technology.technology_subscription_retry_service import (
+        TechnologySubscriptionRetryService,
     )
 
-    item["status"] = "RESOLVED"
-    item["retry_count"] += 1
-    item["resolved_at"] = datetime.now(timezone.utc).isoformat()
-
-    _PROVISIONING_LOGS.insert(0, {
-        "id": f"log-{uuid.uuid4().hex[:6]}",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "event": "PROVISION_RETRY",
-        "service_slug": item["service_slug"],
-        "message": f"Retry provisioning successful for user {item['user_id']} ({item['service_name']})",
-        "status": "SUCCESS",
-    })
-
-    return {"success": True, "item": item, "provision_result": prov_res}
+    service = TechnologySubscriptionRetryService(db)
+    result = await service.retry_subscription(item_id, force=True)
+    if result.get("error") == "Subscription not found":
+        raise HTTPException(status_code=404, detail="Failed provisioning item not found")
+    return result
 
 
 @router.post("/admin/subscriptions/{subscription_id}/retry")
@@ -1406,9 +1591,32 @@ async def admin_retry_subscription(
 
     service = TechnologySubscriptionRetryService(db)
     result = await service.retry_subscription(subscription_id, force=True)
-    if not result.get("success") and result.get("status") != "PENDING":
-        raise HTTPException(status_code=400, detail=result.get("error", "Retry failed"))
+    if result.get("error") == "Subscription not found":
+        raise HTTPException(status_code=404, detail="Subscription not found")
     return result
+
+
+@router.get("/admin/mail-diagnostics")
+def get_admin_mail_diagnostics(
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
+) -> dict[str, Any]:
+    """Admin: report non-secret runtime mail configuration."""
+    return {
+        "config": safe_mail_config_diagnostic(),
+        "runtime": local_runtime_context(),
+    }
+
+
+@router.post("/admin/mail-diagnostics/send-test")
+def send_admin_mail_diagnostic(
+    payload: MailDiagnosticSendRequest,
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
+) -> dict[str, Any]:
+    """Admin: run a real SMTP auth/send test without exposing credentials."""
+    return {
+        "config": safe_mail_config_diagnostic(),
+        "smtp_test": run_smtp_connectivity_test(payload.to_email),
+    }
 
 
 class AdminFulfillRequest(BaseModel):
@@ -1463,7 +1671,7 @@ async def admin_fulfill_subscription(
     if payload.provider_reference:
         sub.provider_subscription_id = payload.provider_reference
     if payload.credentials_json is not None:
-        sub.credentials_json = json.dumps(payload.credentials_json)
+        store_subscription_credentials(sub, payload.credentials_json)
     sub.last_provider_status = "MANUAL_FULFILLMENT_COMPLETED"
     sub.last_provider_error = None
     sub.needs_review = False
@@ -1548,8 +1756,9 @@ async def admin_fulfill_subscription(
                 amount_inr=float(sub.price or 0.0),
                 purchase_date=datetime.now(timezone.utc).strftime("%d %b %Y"),
                 service_status="Active",
-                provider_info=f"Service ID: {sub.provider_subscription_id or sub.provider_order_id or 'N/A'}",
+                provider_info=f"Service ID: {sub.provider_subscription_id or 'N/A'}",
                 purchases_url=f"{settings.FRONTEND_BASE_URL.rstrip('/')}/purchases",
+                **confirmation_email_kwargs(sub),
             )
             sub.email_sent = True
             sub.confirmation_sent = True
@@ -1557,11 +1766,48 @@ async def admin_fulfill_subscription(
         except Exception:
             logger.exception("technology.admin.fulfill_confirmation_email.failed sub=%s", sub.id)
 
+    if not getattr(sub, "access_email_sent", False):
+        user = None
+        try:
+            from app.entity.user.app_user import AppUser
+
+            user_stmt = sa_select(AppUser).where(AppUser.id == uuid.UUID(str(sub.user_id)))
+            user_result = await db.execute(user_stmt)
+            user = user_result.scalar_one_or_none()
+        except Exception:
+            user = None
+        user_email = user.email if user is not None else sub.user_id
+        customer_name = (
+            " ".join(
+                part
+                for part in [
+                    getattr(user, "firstname", None) if user is not None else None,
+                    getattr(user, "lastname", None) if user is not None else None,
+                ]
+                if part
+            )
+            or user_email
+        )
+        access_payload = access_email_payload(sub, customer_name=customer_name)
+        if access_payload is not None:
+            try:
+                await MailService.send_technology_service_access_email(
+                    to_email=user_email,
+                    **access_payload,
+                )
+                sub.access_email_sent = True
+                sub.access_email_status = "SENT"
+                await db.commit()
+            except Exception:
+                sub.access_email_status = "FAILED"
+                await db.commit()
+                logger.exception("technology.admin.fulfill_access_email.failed sub=%s", sub.id)
+
     return {
         "success": True,
         "subscription_id": str(sub.id),
         "status": sub.status,
-        "credentials": json.loads(sub.credentials_json) if sub.credentials_json else {},
+        "credentials": load_provider_credentials(sub.credentials_json),
         "notes": payload.notes,
     }
 

@@ -21,6 +21,12 @@ import httpx
 
 from app.core.config import settings
 from app.integrations.resellportal.mock_resellportal_api import MockResellPortalAPI
+from app.service.technology.provider_access import (
+    credential_log_fields,
+    extract_provider_credentials,
+    real_provider_order_id,
+    real_provider_service_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +34,97 @@ UNCONFIGURED_ADMIN_MESSAGE = (
     "ResellPortal API credentials have not been configured yet. "
     "API keys will be added after the provider wallet is funded and API access is generated."
 )
+
+
+def normalize_provision_response(
+    res: dict[str, Any],
+    *,
+    user_id: str,
+    billing_cycle: str,
+) -> dict[str, Any]:
+    """Map a live POST /orders body onto local fields without fabricating IDs.
+
+    Confirmed success shape::
+
+        {"success": true, "status": "ACTIVE", "service_id": "...",
+         "credentials": {"access_token": "...", "username": "..."}}
+
+    ``service_id`` is stored as ``provider_subscription_id`` (existing renew /
+    upgrade / cancel identifier). Missing real service_id on an ACTIVE claim
+    is treated as incomplete provisioning, never as a fake RSP-SUB id.
+    """
+    if not res.get("success") or res.get("fallback"):
+        logger.warning(
+            "ResellPortal provision request did not yield confirmed success. user_id=%s reason=%s",
+            user_id,
+            res.get("error") or "unknown",
+        )
+        return {
+            "success": False,
+            "status": "PROVISIONING_PENDING",
+            "provider_order_id": real_provider_order_id(res, user_id=user_id),
+            "provider_subscription_id": None,
+            "service_id": None,
+            "current_period_start": None,
+            "current_period_end": None,
+            "credentials": {},
+            "error": res.get("error") or "ResellPortal request did not confirm provisioning.",
+            "needs_reconciliation": True,
+            "configured": True,
+        }
+
+    service_id = real_provider_service_id(res, user_id=user_id)
+    order_id = real_provider_order_id(res, user_id=user_id)
+    credentials = extract_provider_credentials(res)
+    status = str(res.get("status") or "").strip().upper() or "PROVISIONING_PENDING"
+
+    logger.info(
+        "ResellPortal provision mapped user=%s status=%s has_service_id=%s has_order_id=%s %s",
+        user_id,
+        status,
+        bool(service_id),
+        bool(order_id),
+        credential_log_fields(credentials),
+    )
+
+    if status == "ACTIVE" and not service_id:
+        logger.warning(
+            "ResellPortal provision missing real service_id; treating as incomplete. user=%s",
+            user_id,
+        )
+        return {
+            "success": False,
+            "status": "PROVISIONING_PENDING",
+            "provider_order_id": order_id,
+            "provider_subscription_id": None,
+            "service_id": None,
+            "current_period_start": None,
+            "current_period_end": None,
+            "credentials": {},
+            "error": "Provider did not return a real service_id.",
+            "needs_reconciliation": True,
+            "configured": True,
+        }
+
+    start = res.get("current_period_start")
+    end = res.get("current_period_end")
+    if not start:
+        start = datetime.now(timezone.utc)
+    if not end:
+        days = 365 if billing_cycle == "annually" else 30
+        end = datetime.now(timezone.utc) + timedelta(days=days)
+
+    return {
+        "success": True,
+        "status": status,
+        "provider_order_id": order_id,
+        "provider_subscription_id": service_id,
+        "service_id": service_id,
+        "current_period_start": start,
+        "current_period_end": end,
+        "credentials": credentials,
+        "configured": True,
+    }
 
 
 class ResellPortalClient:
@@ -157,12 +254,29 @@ class ResellPortalClient:
                 if isinstance(res_json, dict):
                     res_json["configured"] = True
                 return res_json
-        except Exception as err:
-            logger.warning("ResellPortal HTTP Request Error [%s %s]: %s", method, endpoint, err)
-            # Fallback gracefully to mock response rather than throwing 500 error
+        except httpx.HTTPStatusError as err:
+            logger.warning(
+                "ResellPortal HTTP Request Error [%s %s]: status=%s",
+                method,
+                endpoint,
+                err.response.status_code if err.response is not None else "unknown",
+            )
             return {
                 "success": False,
-                "error": str(err),
+                "error": f"HTTP {err.response.status_code}" if err.response is not None else type(err).__name__,
+                "configured": self.is_configured(),
+                "fallback": True,
+            }
+        except Exception as err:
+            logger.warning(
+                "ResellPortal HTTP Request Error [%s %s]: %s",
+                method,
+                endpoint,
+                type(err).__name__,
+            )
+            return {
+                "success": False,
+                "error": type(err).__name__,
                 "configured": self.is_configured(),
                 "fallback": True,
             }
@@ -294,12 +408,15 @@ class ResellPortalClient:
 
         if matching_order:
             status = str(matching_order.get("status") or "PENDING").upper()
+            service_id = real_provider_service_id(matching_order, user_id=user_id)
             return {
                 "success": status in {"ACTIVE", "PENDING", "PROVISIONING_PENDING"},
                 "status": status,
                 "needs_reconciliation": True,
-                "provider_order_id": matching_order.get("provider_order_id") or matching_order.get("order_id"),
-                "provider_subscription_id": matching_order.get("provider_subscription_id") or matching_order.get("subscription_id"),
+                "provider_order_id": real_provider_order_id(matching_order, user_id=user_id),
+                "provider_subscription_id": service_id,
+                "service_id": service_id,
+                "credentials": extract_provider_credentials(matching_order),
                 "reconciled": True,
             }
 
@@ -378,43 +495,7 @@ class ResellPortalClient:
             payload["ai_tools"] = [payload["ai_tools"]]
 
         res = self._make_request("POST", "orders", json_data=payload)
-        # Do not convert network/timeout/fallback errors into a fake successful order.
-        if not res.get("success") or res.get("fallback"):
-            logger.warning(
-                "ResellPortal provision request did not yield confirmed success. service=%s user_id=%s product_key=%s reason=%s",
-                service_slug,
-                user_id,
-                product_key,
-                res.get("error") or "unknown",
-            )
-            return {
-                "success": False,
-                "status": "PROVISIONING_PENDING",
-                "provider_order_id": None,
-                "provider_subscription_id": None,
-                "current_period_start": None,
-                "current_period_end": None,
-                "credentials": {},
-                "error": res.get("error") or "ResellPortal request did not confirm provisioning.",
-                "needs_reconciliation": True,
-                "configured": True,
-            }
-
-        res.setdefault("provider_order_id", res.get("order_id") or res.get("provider_order_id") or f"RSP-ORD-{user_id[:8]}")
-        res.setdefault("provider_subscription_id", res.get("subscription_id") or res.get("provider_subscription_id") or res.get("service_id") or f"RSP-SUB-{user_id[:8]}")
-        res.setdefault("credentials", res.get("client_credentials", {}))
-        if not res.get("current_period_start"):
-            res["current_period_start"] = datetime.now(timezone.utc)
-        if not res.get("current_period_end"):
-            days = 365 if billing_cycle == "annually" else 30
-            res["current_period_end"] = datetime.now(timezone.utc) + timedelta(days=days)
-        if "status" not in res:
-            res["status"] = "PROVISIONING_PENDING"
-        if "current_period_start" not in res:
-            res["current_period_start"] = None
-        if "current_period_end" not in res:
-            res["current_period_end"] = None
-        return res
+        return normalize_provision_response(res, user_id=user_id, billing_cycle=billing_cycle)
 
     def renew_subscription(self, provider_sub_id: str, billing_cycle: str) -> dict[str, Any]:
         """Renew active subscription with provider."""

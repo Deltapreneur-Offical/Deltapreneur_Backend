@@ -26,6 +26,29 @@ _cache_source_unix: int | None = None
 _cache_providers: list[str] | None = None
 
 
+# Last-resort INR -> foreign rates, aligned with the existing checkout rate
+# assumptions. Live providers and any last good cache are always preferred.
+_FALLBACK_RATES_FROM_INR: dict[str, float] = {
+    "INR": 1.0,
+    "USD": 0.0105,
+    "EUR": 0.011,
+    "GBP": 0.011,
+    "AED": 0.044,
+    "SAR": 0.044,
+    "QAR": 0.044,
+    "SGD": 0.012,
+    "AUD": 0.012,
+    "CAD": 0.012,
+    "CHF": 0.012,
+}
+
+
+def _fallback_rates_from_inr() -> dict[str, float]:
+    rates = {code: 1.0 for code in SUPPORTED_CURRENCIES}
+    rates.update(_FALLBACK_RATES_FROM_INR)
+    return rates
+
+
 def _normalize_snapshot(raw: dict[str, Any]) -> dict[str, float]:
     rates: dict[str, float] = {"INR": 1.0}
     for code in SUPPORTED_CURRENCIES:
@@ -173,7 +196,18 @@ def get_exchange_rates(*, force_refresh: bool = False) -> dict[str, Any]:
                 "ttlSeconds": _CACHE_TTL_SECONDS,
                 "providers": list(_cache_providers or []),
             }
-        raise
+        logger.warning("exchange_rate.using_static_fallback_rates")
+        return {
+            "base": "INR",
+            "rates": _fallback_rates_from_inr(),
+            "updatedAt": None,
+            "sourceUpdatedAt": None,
+            "cached": False,
+            "stale": True,
+            "fallback": True,
+            "ttlSeconds": _CACHE_TTL_SECONDS,
+            "providers": ["static-fallback"],
+        }
 
 
 def convert_foreign_to_inr(amount: float, from_currency: str) -> dict[str, Any]:

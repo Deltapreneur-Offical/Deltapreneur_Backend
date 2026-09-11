@@ -30,14 +30,20 @@ class TechnologySubscriptionEntity(UUIDPrimaryKeyMixin, TimestampMixin, SoftDele
     status: Mapped[str] = mapped_column(String(32), default="ACTIVE", nullable=False)
     # PAYMENT_CAPTURED, PROVISIONING, ACTIVE, PENDING, PROVISIONING_FAILED, CANCELLED, SUSPENDED
     payment_status: Mapped[str] = mapped_column(String(32), default="CAPTURED", nullable=False)
+    # Real provider service instance id (ResellPortal `service_id` for Link in Bio).
+    # Used by renew / upgrade / cancel. Never a fabricated RSP-SUB-{user[:8]} value.
     provider_subscription_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Real provider order id when returned. Optional; never fabricated as RSP-ORD-{user[:8]}.
     provider_order_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Encrypted JSON (`enc:v1:` + Fernet). Legacy plaintext JSON is still readable.
     credentials_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     current_period_start: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     current_period_end: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     auto_renew: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     email_sent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     confirmation_sent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    access_email_sent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    access_email_status: Mapped[str] = mapped_column(String(16), default="PENDING", nullable=False)
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True)
     provision_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_provision_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

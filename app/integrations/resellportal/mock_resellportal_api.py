@@ -88,22 +88,24 @@ class MockResellPortalAPI:
     ) -> dict[str, Any]:
         """Mock POST /services/provision endpoint."""
         provider_order_id = f"RSP-ORD-{secrets.token_hex(4).upper()}"
-        provider_sub_id = f"RSP-SUB-{secrets.token_hex(6).upper()}"
+        service_id = secrets.token_hex(6)
         access_token = secrets.token_urlsafe(24)
         instance_id = secrets.token_hex(4)
 
-        # 100% white-labelled URL under CoBrother domain namespace
-        white_label_url = f"https://workspace.cobrother.com/app/{service_slug}/{instance_id}?token={access_token}"
+        # White-labelled URL under Deltapreneur/CoBrother namespace. Never put
+        # access_token in query parameters.
+        white_label_url = f"https://workspace.cobrother.com/app/{service_slug}/{instance_id}"
 
         credentials = {
-            "access_url": white_label_url,
-            "account_id": f"cb_{user_id[:8]}",
             "username": user_email,
             "access_token": access_token,
             "custom_domain_supported": True,
             "provisioned_at": datetime.now(timezone.utc).isoformat(),
-            "instructions": f"Access your white-labelled {service_name} dashboard via CoBrother workspace.",
+            "instructions": f"Access your white-labelled {service_name} dashboard via Deltapreneur.",
         }
+        if str(service_slug or "").strip().lower().replace("_", "-") != "link-in-bio":
+            credentials["access_url"] = white_label_url
+            credentials["account_id"] = f"cb_{user_id[:8]}"
 
         start_time = datetime.now(timezone.utc)
         days = 365 if billing_cycle == "annually" else 30
@@ -113,8 +115,9 @@ class MockResellPortalAPI:
             "success": True,
             "product_key": product_key or service_slug,
             "order_parameters": dict(order_parameters or {}),
+            "service_id": service_id,
             "provider_order_id": provider_order_id,
-            "provider_subscription_id": provider_sub_id,
+            "provider_subscription_id": service_id,
             "status": "ACTIVE",
             "current_period_start": start_time,
             "current_period_end": end_time,

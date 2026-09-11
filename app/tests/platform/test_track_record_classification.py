@@ -416,9 +416,9 @@ def test_tech_fulfillment_from_result():
     pending = _tech_fulfillment_from_result({"status": "PENDING"}, is_service=True)
     assert pending[:2] == (FulfillmentStatus.IN_PROGRESS, OverallStatus.PENDING)
 
-    # Provider service FAILED => failed with a service error (never a domain error).
+    # Provider service FAILED => recoverable pending retry, with diagnostics.
     failed = _tech_fulfillment_from_result({"status": "FAILED"}, is_service=True)
-    assert failed[1] == OverallStatus.FAILED
+    assert failed[:2] == (FulfillmentStatus.IN_PROGRESS, OverallStatus.PENDING)
     assert failed[2] == "SERVICE_PROVISIONING_FAILED"
 
 
