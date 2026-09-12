@@ -27,18 +27,36 @@ def test_async_urls_use_asyncpg_for_async_sessions() -> None:
     assert _to_async_url(sync_url) == "postgresql+asyncpg://user:pass@localhost:5432/app"
 
 
-def test_supabase_session_pooler_urls_are_normalized_to_transaction_mode() -> None:
+def test_supabase_session_pooler_urls_are_normalized_to_transaction_mode(monkeypatch) -> None:
+    import app.core.database as db
+
+    monkeypatch.setattr(db.settings, "ENVIRONMENT", "production")
     raw = "postgresql://user:pass@aws-0-ap-northeast-2.pooler.supabase.com:5432/postgres"
 
-    assert _normalize_supabase_pooler_url(raw) == (
+    assert db._normalize_supabase_pooler_url(raw) == (
         "postgresql://user:pass@aws-0-ap-northeast-2.pooler.supabase.com:6543/postgres"
     )
 
 
-def test_supabase_transaction_pooler_urls_are_left_unchanged() -> None:
+def test_supabase_transaction_pooler_urls_are_left_unchanged(monkeypatch) -> None:
+    import app.core.database as db
+
+    monkeypatch.setattr(db.settings, "ENVIRONMENT", "production")
     raw = "postgresql://user:pass@aws-0-ap-northeast-2.pooler.supabase.com:6543/postgres"
 
-    assert _normalize_supabase_pooler_url(raw) == raw
+    assert db._normalize_supabase_pooler_url(raw) == raw
+
+
+def test_development_uses_supabase_session_pooler(monkeypatch) -> None:
+    import app.core.database as db
+
+    monkeypatch.setattr(db.settings, "ENVIRONMENT", "development")
+    raw = "postgresql://postgres.projref:p%40ss@aws-0-ap-northeast-2.pooler.supabase.com:6543/postgres"
+    normalized = db._normalize_supabase_pooler_url(raw)
+
+    assert normalized == (
+        "postgresql://postgres.projref:p%40ss@aws-0-ap-northeast-2.pooler.supabase.com:5432/postgres"
+    )
 
 
 def test_db_timeout_and_recycle_settings() -> None:
@@ -51,12 +69,44 @@ def test_db_timeout_and_recycle_settings() -> None:
     assert settings.DB_POOLER_REUSE_CONNECTIONS is True
 
 
+def test_sync_engine_skips_psycopg2_hstore_oid_probe() -> None:
+    """Render alembic/app connect used to die on HstoreAdapter.get_oids."""
+    import app.core.database as db
+
+    assert db._sync_engine_kwargs.get("use_native_hstore") is False
+    if getattr(engine.dialect, "name", "") == "postgresql":
+        assert engine.dialect.use_native_hstore is False
+
+
+def test_alembic_env_disables_native_hstore() -> None:
+    from pathlib import Path
+
+    env_path = Path(__file__).resolve().parents[2] / "alembic" / "env.py"
+    source = env_path.read_text(encoding="utf-8")
+    assert "use_native_hstore=False" in source
+    assert "_sync_connect_args" in source
+    assert '"sslmode": "require"' not in source
+
+
 def test_sync_connect_args_use_psycopg2_timeouts() -> None:
     args = _sync_connect_args()
     assert args["connect_timeout"] == settings.DB_CONNECT_TIMEOUT_SECONDS
     assert args["options"] == (
         f"-c statement_timeout={settings.DB_COMMAND_TIMEOUT_SECONDS * 1000}"
     )
+    assert args["gssencmode"] == "disable"
+
+
+def test_sync_connect_args_require_tls_only_for_remote_hosts() -> None:
+    import app.core.database as db
+
+    local = db._sync_connect_args("postgresql://ci:ci@localhost:5432/cobrother_ci_app")
+    assert "sslmode" not in local
+
+    remote = db._sync_connect_args(
+        "postgresql://user:pass@aws-0-ap-northeast-2.pooler.supabase.com:6543/postgres"
+    )
+    assert remote["sslmode"] == "require"
 
 
 def test_async_connect_args_use_asyncpg_timeouts() -> None:
