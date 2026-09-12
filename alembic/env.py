@@ -193,6 +193,16 @@ def run_migrations_online() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        # Skip the psycopg2 hstore OID probe. On Supabase/pgbouncer that extra
+        # on_connect query is what surfaces as
+        # "SSL connection has been closed unexpectedly" and fails
+        # `alembic upgrade head` on Render.
+        use_native_hstore=False,
+        connect_args={
+            "connect_timeout": 15,
+            "gssencmode": "disable",
+            "sslmode": "require",
+        },
     )
 
     with connectable.connect() as connection:

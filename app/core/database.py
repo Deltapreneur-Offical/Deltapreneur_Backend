@@ -1,5 +1,5 @@
 from typing import AsyncGenerator
-from urllib.parse import quote, urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
 from sqlalchemy import create_engine
@@ -33,13 +33,40 @@ def _supabase_pooler_port(url: str) -> int | None:
     return None
 
 
-def _normalize_supabase_pooler_url(url: str) -> str:
-    """Prefer Supabase transaction pooler (:6543) over session mode (:5432).
+def _prefer_supabase_session_pooler() -> bool:
+    """Local laptops should use session mode; production stays on transaction mode.
 
-    Render deploys can briefly overlap old/new instances plus migrations, and
-    the session pooler has a strict client cap. Transaction mode combined with
-    ``NullPool`` keeps the app and Alembic from pinning scarce sessions.
+    The Supabase transaction pooler (:6543) often closes SSL mid-handshake from
+    developer machines (``SSL connection has been closed unexpectedly`` /
+    asyncpg ``TimeoutError`` during JSON codec setup). Session mode (:5432)
+    stays stable locally. Render/production still prefer :6543 because the
+    session pooler has a stricter client cap during overlapping deploys.
     """
+    env = (getattr(settings, "ENVIRONMENT", "") or "").strip().lower()
+    return env in {"development", "dev", "local"}
+
+
+def _with_supabase_pooler_port(url: str, port: int) -> str:
+    """Change only the pooler port. Leave userinfo encoding untouched.
+
+    Re-quoting ``postgres.<project-ref>`` or ``%40`` passwords corrupts the
+    URL (dots become ``%2E``, ``%40`` becomes ``%2540``) and login fails.
+    """
+    parsed = urlparse(url)
+    host = parsed.hostname
+    old_port = parsed.port or 5432
+    if not host:
+        return url
+    old_suffix = f"{host}:{old_port}"
+    new_suffix = f"{host}:{port}"
+    netloc = parsed.netloc
+    if not netloc.endswith(old_suffix):
+        return url
+    return urlunparse(parsed._replace(netloc=netloc[: -len(old_suffix)] + new_suffix))
+
+
+def _normalize_supabase_pooler_url(url: str) -> str:
+    """Pick the Supabase pooler port that matches the runtime environment."""
     raw = (url or "").strip()
     if not raw:
         return raw
@@ -51,27 +78,17 @@ def _normalize_supabase_pooler_url(url: str) -> str:
     except Exception:
         return raw
 
-    if "pooler.supabase.com" not in host or port != 5432:
+    if "pooler.supabase.com" not in host:
         return raw
 
-    auth = ""
-    if parsed.username:
-        auth = quote(parsed.username, safe="")
-        if parsed.password is not None:
-            auth = f"{auth}:{quote(parsed.password, safe='')}"
-        auth = f"{auth}@"
+    if _prefer_supabase_session_pooler():
+        if port == 6543:
+            return _with_supabase_pooler_port(raw, 5432)
+        return raw
 
-    netloc = f"{auth}{parsed.hostname}:6543"
-    return urlunparse(
-        (
-            parsed.scheme,
-            netloc,
-            parsed.path,
-            parsed.params,
-            parsed.query,
-            parsed.fragment,
-        )
-    )
+    if port == 5432:
+        return _with_supabase_pooler_port(raw, 6543)
+    return raw
 
 
 # Respect DATABASE_URL, but normalize Supabase pooler URLs to the safer
@@ -111,10 +128,15 @@ def _positive_int(value: int) -> int:
 def _sync_connect_args() -> dict:
     """psycopg2 connect_args: fail fast on dead/unreachable servers."""
     timeout_ms = _positive_int(settings.DB_COMMAND_TIMEOUT_SECONDS) * 1000
-    return {
+    args = {
         "connect_timeout": _positive_int(settings.DB_CONNECT_TIMEOUT_SECONDS),
         "options": f"-c statement_timeout={timeout_ms}",
+        # Windows may attempt GSSAPI before TLS; that handshake then dies on
+        # Supabase with "SSL connection has been closed unexpectedly".
+        "gssencmode": "disable",
+        "sslmode": "require",
     }
+    return args
 
 
 def _async_connect_args(
@@ -188,6 +210,11 @@ if _uses_supabase_pooler(DATABASE_URL):
         _sync_engine_kwargs.update(_queue_pool_kwargs(_sync_pool_size, _sync_max_overflow))
 else:
     _sync_engine_kwargs.update(_queue_pool_kwargs(_sync_pool_size, _sync_max_overflow))
+
+# Always skip the psycopg2 hstore OID probe. The app does not use hstore, and
+# that on_connect SELECT is the exact query that dies on Supabase/pgbouncer
+# with "SSL connection has been closed unexpectedly" (Render pre-deploy).
+_sync_engine_kwargs["use_native_hstore"] = False
 
 engine = create_engine(
     _to_sync_url(DATABASE_URL),
