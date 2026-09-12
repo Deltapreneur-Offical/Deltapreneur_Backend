@@ -132,7 +132,8 @@ class MarketplaceDomainService:
         ):
             await self._repo.increment_views(listing.id)
             await self._session.commit()
-            return await self.get_listing(listing_id)
+            listing.views = int(listing.views or 0) + 1
+            return listing
         return listing
 
     async def create_listing(

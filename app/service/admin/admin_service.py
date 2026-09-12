@@ -25,6 +25,7 @@ from app.entity.user.app_user import AppUser
 from app.entity.user.user_role import UserRole
 from app.repository.user_repository import UserRepository
 from app.utils.enums import AuctionStatus
+from app.core.public_list_cache import public_list_cache_clear
 from app.service.admin.admin_serializers import (
     serialize_cobrother_request,
     serialize_coventure,
@@ -531,6 +532,7 @@ async def toggle_domain_homepage(db: Session, entity_id: str):
         return {"success": False, "error": "Domain not found"}
     row.featured = not row.featured
     db.commit()
+    public_list_cache_clear()
     return {"success": True, "featured": row.featured}
 
 
@@ -540,6 +542,7 @@ async def toggle_venture_homepage(db: Session, entity_id: str):
         return {"success": False, "error": "Venture not found"}
     row.featured = not row.featured
     db.commit()
+    public_list_cache_clear("ventures:")
     return {"success": True, "featured": row.featured}
 
 
@@ -555,6 +558,7 @@ async def toggle_software_homepage(db: Session, entity_id: str):
         }
     row.featured = next_featured
     db.commit()
+    public_list_cache_clear("software:")
     return {"success": True, "featured": row.featured}
 
 
@@ -606,4 +610,5 @@ async def set_featured(db: Session, entity_type: str, entity_id: str, featured: 
         }
     row.featured = featured
     db.commit()
+    public_list_cache_clear()
     return {"success": True, "featured": row.featured}

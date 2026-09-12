@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.core.database import get_async_db, get_db
+from app.core.public_list_cache import public_list_cache_get, public_list_cache_put
 from app.core.dependencies import get_optional_current_user
 from app.entity.user.app_user import AppUser
 from app.repository.operations_service_view_repository import OperationsServiceViewRepository
@@ -47,14 +48,20 @@ async def list_operations_services(
     normalized_type = service_type.strip().lower() if service_type else None
     if normalized_type and normalized_type not in {"virtual_assistance", "compliance"}:
         normalized_type = None
+    cache_key = f"operations:public:{normalized_type or 'all'}"
+    cached = public_list_cache_get(cache_key)
+    if cached is not None:
+        return cached
     items = await service.list_public(service_type=normalized_type)
     items = _attach_view_counts(db, items)
-    return {
+    payload = {
         "success": True,
         "message": "Operations services fetched",
         "data": items,
         "items": items,
     }
+    public_list_cache_put(cache_key, payload)
+    return payload
 
 
 @router.get("/{service_id}")

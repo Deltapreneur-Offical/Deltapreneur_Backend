@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.core.database import get_async_db, get_db
+from app.core.public_list_cache import public_list_cache_get, public_list_cache_put
 from app.core.exceptions import AppException
 from app.core.dependencies import get_current_user, get_optional_current_user
 from app.entity.coventure.venture_entity import Venture
@@ -112,6 +113,12 @@ async def list_all_ventures(
     ),
     service: VentureService = Depends(get_venture_service),
 ) -> PublicVentureListResponse:
+    cache_key = None
+    if featured_only and not include_pending:
+        cache_key = f"ventures:featured:{mode}:{page}:{page_size}"
+        cached = public_list_cache_get(cache_key)
+        if cached is not None:
+            return PublicVentureListResponse.model_validate(cached)
     total, items = await service.list_public_page(
         page=page,
         page_size=page_size,
@@ -130,12 +137,15 @@ async def list_all_ventures(
     rows = [item.model_dump(mode="json", by_alias=True) for item in serialized]
     for row in rows:
         row.setdefault("likeCount", 0)
-    return PublicVentureListResponse(
+    payload = PublicVentureListResponse(
         items=[PublicVentureResponse.model_validate(row) for row in rows],
         total=total,
         page=page,
         page_size=page_size if page_size is not None else total,
     )
+    if cache_key:
+        public_list_cache_put(cache_key, payload.model_dump(mode="json"))
+    return payload
 
 
 @router.get("/my", response_model=VentureListResponse)

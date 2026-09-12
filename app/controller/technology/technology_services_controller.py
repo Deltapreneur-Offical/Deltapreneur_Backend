@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.controller.auth.auth_controller import get_current_user
 from app.core.config import settings
 from app.core.database import get_async_db, get_db
+from app.core.public_list_cache import public_list_cache_get, public_list_cache_put
 from app.core.dependencies import require_role
 from app.entity.technology_services.technology_service_entity import TechnologyServiceEntity
 from app.entity.technology_services.technology_subscription_entity import TechnologySubscriptionEntity
@@ -627,6 +628,10 @@ def list_technology_services(
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
     """List all available Technology Services from catalogue."""
+    cache_key = f"tech-services:{category or 'all'}:{int(featured_only)}"
+    cached = public_list_cache_get(cache_key)
+    if cached is not None:
+        return cached
     try:
         ensure_catalogue_seeded_sync(db)
         query = db.query(TechnologyServiceEntity).filter(
@@ -641,7 +646,9 @@ def list_technology_services(
         services = query.order_by(TechnologyServiceEntity.display_order.asc()).all()
 
         if not services:
-            return _get_fallback_services(category=category, featured_only=featured_only)
+            result = _get_fallback_services(category=category, featured_only=featured_only)
+            public_list_cache_put(cache_key, result)
+            return result
 
         result = []
         for s in services:
@@ -666,10 +673,13 @@ def list_technology_services(
                 "provider_product_key": s.provider_product_key,
                 "provider_specific_params": json.loads(s.provider_specific_params) if s.provider_specific_params else None,
             })
+        public_list_cache_put(cache_key, result)
         return result
     except Exception as err:
         logger.warning("Error fetching technology services from DB, serving fallback catalogue: %s", err)
-        return _get_fallback_services(category=category, featured_only=featured_only)
+        result = _get_fallback_services(category=category, featured_only=featured_only)
+        public_list_cache_put(cache_key, result)
+        return result
 
 
 @router.get("/{slug}")

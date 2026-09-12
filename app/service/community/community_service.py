@@ -444,7 +444,7 @@ class CommunityService:
             communities = CommunityRepository.find_for_listing(
                 db,
                 featured_only=True,
-                limit=None,
+                limit=page_size,
             )
             complete = list(communities)
         else:

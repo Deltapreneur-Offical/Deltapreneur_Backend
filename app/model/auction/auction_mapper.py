@@ -73,6 +73,7 @@ def domain_summary_from_listing(listing: Any) -> dict[str, Any]:
         "pricingDemand": _pricing_demand_value(listing),
         "logo": resolve_media_url(logo_raw) if logo_raw else None,
         "verified": bool(getattr(listing, "verified", False)),
+        "views": int(getattr(listing, "views", 0) or 0),
         "listedBy": user_brief(getattr(listing, "listed_by", None)),
     }
 

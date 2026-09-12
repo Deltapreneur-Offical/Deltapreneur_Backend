@@ -222,7 +222,7 @@ class AuctionService:
             )
         )
         listing_ids = list({a.domain_id for a in auctions})
-        listings = await self._listing_repo.get_by_ids(listing_ids)
+        listings = await self._listing_repo.get_by_ids_card(listing_ids)
         listing_by_id = {listing.id: listing for listing in listings}
         return [
             build_public_auction_item(
@@ -253,7 +253,7 @@ class AuctionService:
             )
         )
         listing_ids = list({a.domain_id for a in auctions})
-        listings = await self._listing_repo.get_by_ids(listing_ids)
+        listings = await self._listing_repo.get_by_ids_card(listing_ids)
         listing_by_id = {listing.id: listing for listing in listings}
         return [
             build_public_auction_item(

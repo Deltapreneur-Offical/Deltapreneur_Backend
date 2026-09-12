@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_async_db, get_db
+from app.core.public_list_cache import public_list_cache_get, public_list_cache_put
 from app.core.dependencies import get_current_user, get_optional_current_user
 from app.core.exceptions import AppException
 from app.core.route_logging import log_route_exception, request_payload_for_logging
@@ -139,10 +140,20 @@ async def list_all_domain_listings(
         False,
         description="When true, return only admin-featured homepage listings.",
     ),
+    include_showcase: bool = Query(
+        True,
+        description="When featured_only, also merge OpenProvider showcase rows. Homepage Domains cards set this false.",
+    ),
     service: MarketplaceDomainService = Depends(get_marketplace_service),
     db: AsyncSession = Depends(get_async_db),
 ) -> dict:
     """Public marketplace browse — also returns ``data`` for frontend ``extractDomainList``."""
+    cache_key = None
+    if featured_only:
+        cache_key = f"domains:featured:{page}:{page_size}:{int(include_showcase)}"
+        cached = public_list_cache_get(cache_key)
+        if cached is not None:
+            return cached
     total, listings = await service.list_public_page(
         page=page,
         page_size=page_size,
@@ -154,7 +165,7 @@ async def list_all_domain_listings(
     ]
     for row in serialized:
         row.setdefault("likeCount", 0)
-    if featured_only:
+    if featured_only and include_showcase:
         # Isolated OP Showcase → homepage merge (read-only). Selected showcase
         # domains join the existing homepage feed; marketplace listings win on
         # duplicates. Unselected/deleted/unavailable rows are excluded inside.
@@ -163,7 +174,7 @@ async def list_all_domain_listings(
         if showcase_rows:
             serialized = integration.merge_into_feed(serialized, showcase_rows)
             total = len(serialized)
-    return {
+    payload = {
         "success": True,
         "items": serialized,
         "data": serialized,
@@ -171,6 +182,9 @@ async def list_all_domain_listings(
         "page": page,
         "page_size": page_size if page_size is not None else total,
     }
+    if cache_key:
+        public_list_cache_put(cache_key, payload)
+    return payload
 
 
 @router.get("/showcase")
@@ -185,10 +199,13 @@ async def list_openprovider_showcase(
     the DOMAIN_REGISTRATION flow (never marketplace escrow). No internal
     OpenProvider/commission data is exposed.
     """
+    cached = public_list_cache_get("domains:showcase")
+    if cached is not None:
+        return cached
     svc = ShowcaseDomainService(db)
     read_only = svc.read_only_mode() or not await svc.table_available()
     items, enabled = await svc.list_public()
-    return {
+    payload = {
         "success": True,
         "enabled": enabled,
         "readOnly": read_only,
@@ -196,6 +213,8 @@ async def list_openprovider_showcase(
         "data": items,
         "total": len(items),
     }
+    public_list_cache_put("domains:showcase", payload)
+    return payload
 
 
 @router.get("/check", response_model=DomainCheckResponse)

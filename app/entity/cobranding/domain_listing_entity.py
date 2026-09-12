@@ -41,6 +41,14 @@ class DomainListing(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
             "domain_status",
             "created_at",
         ),
+        Index(
+            "ix_domain_listings_featured_public",
+            "featured",
+            "is_deleted",
+            "taken_down",
+            "status",
+            "domain_status",
+        ),
     )
 
     domain_name: Mapped[str] = mapped_column(String(255), nullable=False)
