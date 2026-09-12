@@ -10,7 +10,7 @@ from typing import Any, Optional, Sequence
 
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import noload, selectinload
 
 from app.entity.auction.auction_entity import Auction
 from app.entity.auction.domain_entity import Domain
@@ -187,6 +187,10 @@ class AuctionRepository:
             )
             .options(
                 selectinload(Auction.domain).selectinload(Domain.owner),
+                noload(Auction.bids),
+                noload(Auction.payments),
+                noload(Auction.current_winner),
+                noload(Auction.creator),
             )
             .order_by(Auction.end_time.asc())
             .offset(offset)
@@ -220,6 +224,10 @@ class AuctionRepository:
             )
             .options(
                 selectinload(Auction.domain).selectinload(Domain.owner),
+                noload(Auction.bids),
+                noload(Auction.payments),
+                noload(Auction.current_winner),
+                noload(Auction.creator),
             )
             .order_by(Auction.end_time.asc())
             .offset(offset)

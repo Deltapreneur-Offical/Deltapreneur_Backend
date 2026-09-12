@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.core.database import get_async_db, get_db as get_sync_db
+from app.core.public_list_cache import public_list_cache_get, public_list_cache_put
 from app.core.dependencies import get_current_user
 from app.entity.user.app_user import AppUser
 from app.model.cocreation.cocreation_request import CreateSoftwareRequest, UpdateSoftwareRequest
@@ -116,6 +117,12 @@ async def list_all_software(
     service: CocreationService = Depends(get_cocreation_service),
     auction_repo: SoftwareAuctionRepository = Depends(get_auction_repo),
 ) -> dict:
+    cache_key = None
+    if featured_only:
+        cache_key = f"software:featured:{page}:{page_size}"
+        cached = public_list_cache_get(cache_key)
+        if cached is not None:
+            return cached
     total, item_list = await service.list_public_page(
         page=page,
         page_size=page_size,
@@ -135,6 +142,8 @@ async def list_all_software(
     payload["total"] = total
     payload["page"] = page
     payload["page_size"] = page_size if page_size is not None else total
+    if cache_key:
+        public_list_cache_put(cache_key, payload)
     return payload
 
 

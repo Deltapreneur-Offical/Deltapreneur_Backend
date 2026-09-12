@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.public_list_cache import public_list_cache_get, public_list_cache_put
 from app.core.dependencies import get_current_user, get_optional_current_user
 from app.entity.user.app_user import AppUser
 from app.model.common.api_response import ApiResponse
@@ -51,6 +52,16 @@ def get_all_profiles(
     page_size: int | None = Query(default=None, ge=1, le=500),
 ):
     try:
+        cache_key = None
+        if featured_only:
+            cache_key = f"community:featured:{page_size or 'all'}"
+            cached = public_list_cache_get(cache_key)
+            if cached is not None:
+                return ApiResponse(
+                    success=True,
+                    message="Creator profiles fetched successfully",
+                    data=cached,
+                )
         profiles = CommunityService.get_all_profiles(
             db,
             featured_only=featured_only,
@@ -63,6 +74,8 @@ def get_all_profiles(
             "Creator All response schema ok profiles_count=%s",
             len(profiles) if hasattr(profiles, "__len__") else "unknown",
         )
+        if cache_key:
+            public_list_cache_put(cache_key, profiles)
         return ApiResponse(
             success=True,
             message="Creator profiles fetched successfully",

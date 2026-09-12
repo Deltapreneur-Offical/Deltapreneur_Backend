@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import asyncio
@@ -83,7 +84,9 @@ _PRICE_TOLERANCE_INR = 1.0
 # also protects us from OpenProvider rate-limiting.
 _TLD_REMAINING_WINDOW = 100
 _TLD_SEARCH_CACHE_TTL = 300.0
+_TLD_PRICE_HYDRATE_MAX = 16
 _tld_search_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_storefront_prices_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
 def _is_provider_reachability_error(exc: BaseException) -> bool:
@@ -209,6 +212,39 @@ def _sanitize_sld(raw: str) -> str:
     return sanitize_sld(raw)
 
 
+def clear_storefront_prices_cache() -> None:
+    """Drop the display-only storefront price catalog cache."""
+    _storefront_prices_cache.clear()
+
+
+def _storefront_prices_cache_key() -> str:
+    from app.service.domain import domain_commission_config as commission
+    return (
+        f"{commission.revision()}:"
+        f"{settings.DOMAIN_GST_ENABLED}:{settings.DOMAIN_GST_RATE}:"
+        f"{getattr(settings, 'DOMAIN_PRICE_GST_INCLUSIVE', False)}"
+    )
+
+
+def _storefront_prices_cache_get(key: str) -> dict[str, Any] | None:
+    entry = _storefront_prices_cache.get(key)
+    if not entry:
+        return None
+    expiry, payload = entry
+    if time.time() >= expiry:
+        _storefront_prices_cache.pop(key, None)
+        return None
+    return copy.deepcopy(payload)
+
+
+def _storefront_prices_cache_put(key: str, payload: dict[str, Any], ttl: float) -> None:
+    if ttl <= 0:
+        return
+    if len(_storefront_prices_cache) > 32:
+        _storefront_prices_cache.clear()
+    _storefront_prices_cache[key] = (time.time() + ttl, copy.deepcopy(payload))
+
+
 def clear_tld_search_cache() -> None:
     """Drop all cached storefront TLD-search responses.
 
@@ -216,6 +252,7 @@ def clear_tld_search_cache() -> None:
     prices are served immediately instead of waiting out the cache TTL.
     """
     _tld_search_cache.clear()
+    clear_storefront_prices_cache()
 
 
 def active_registrar() -> ModuleType:
@@ -523,6 +560,12 @@ class DomainRegistrationService:
         """Fetch live per-TLD prices from OpenProvider with commission markup. Falls back to defaults."""
         from app.integrations import domain_registrar
         from app.service.domain import domain_commission_config as commission
+        ttl = float(getattr(settings, "STOREFRONT_PRICES_CACHE_TTL_SECONDS", 180.0) or 0)
+        cache_key = _storefront_prices_cache_key()
+        if ttl > 0:
+            cached = _storefront_prices_cache_get(cache_key)
+            if cached is not None:
+                return cached
         reg = domain_registrar.active_registrar()
 
         tlds = ["com", "in", "net", "org", "co", "io", "ai"]
@@ -568,7 +611,14 @@ class DomainRegistrationService:
 
             async def _fetch_one(ext: str) -> tuple[str, float, float, float]:
                 try:
-                    create_quote = await get_domain_price("mydomain", ext, operation="create", period=1)
+                    create_quote, ren_quote, xfer_quote = await asyncio.gather(
+                        get_domain_price("mydomain", ext, operation="create", period=1),
+                        get_domain_price("mydomain", ext, operation="renew", period=1),
+                        get_domain_price("mydomain", ext, operation="transfer", period=1),
+                        return_exceptions=True,
+                    )
+                    if isinstance(create_quote, Exception):
+                        raise create_quote
                     unit_reg, reg_currency, _ = extract_create_price_details(create_quote)
                     logger.info(
                         "[PRICES] .%s create: raw=%.2f currency=%s",
@@ -576,19 +626,23 @@ class DomainRegistrationService:
                     )
                     reg_inr = max(1.0, round(await _to_inr(unit_reg, reg_currency), 2))
 
-                    try:
-                        ren_quote = await get_domain_price("mydomain", ext, operation="renew", period=1)
-                        ren_unit, ren_currency = extract_reseller_price_details(ren_quote)
-                        ren_inr = max(1.0, round(await _to_inr(ren_unit, ren_currency), 2)) if ren_unit else reg_inr
-                    except Exception:
+                    if isinstance(ren_quote, Exception):
                         ren_inr = reg_inr
+                    else:
+                        try:
+                            ren_unit, ren_currency = extract_reseller_price_details(ren_quote)
+                            ren_inr = max(1.0, round(await _to_inr(ren_unit, ren_currency), 2)) if ren_unit else reg_inr
+                        except Exception:
+                            ren_inr = reg_inr
 
-                    try:
-                        xfer_quote = await get_domain_price("mydomain", ext, operation="transfer", period=1)
-                        xfer_unit, xfer_currency = extract_reseller_price_details(xfer_quote)
-                        xfer_inr = max(1.0, round(await _to_inr(xfer_unit, xfer_currency), 2)) if xfer_unit else ren_inr
-                    except Exception:
+                    if isinstance(xfer_quote, Exception):
                         xfer_inr = ren_inr
+                    else:
+                        try:
+                            xfer_unit, xfer_currency = extract_reseller_price_details(xfer_quote)
+                            xfer_inr = max(1.0, round(await _to_inr(xfer_unit, xfer_currency), 2)) if xfer_unit else ren_inr
+                        except Exception:
+                            xfer_inr = ren_inr
 
                     return ext, reg_inr, ren_inr, xfer_inr
                 except Exception as exc:
@@ -673,7 +727,7 @@ class DomainRegistrationService:
         gst_rate = settings.DOMAIN_GST_RATE if settings.DOMAIN_GST_ENABLED else 0.0
         source = "openprovider" if reg.is_configured() else "fallback"
 
-        return {
+        payload = {
             "source": source,
             "gstRate": gst_rate,
             "commissionConfig": comm_cfg,
@@ -741,6 +795,9 @@ class DomainRegistrationService:
                 "label": "Free Setup",
             },
         }
+        if ttl > 0:
+            _storefront_prices_cache_put(cache_key, payload, ttl)
+        return payload
 
     async def check_openprovider_domain(
         self,
@@ -1421,9 +1478,17 @@ class DomainRegistrationService:
                         item.get("domain"),
                         exc,
                     )
-            _attach_tld_item_gst_fields(item)
 
-        await asyncio.gather(*[_hydrate(item) for item in items])
+        missing = [
+            item
+            for item in items
+            if item.get("registrationPrice") is None or item.get("renewalPrice") is None
+        ]
+        to_hydrate = missing[:_TLD_PRICE_HYDRATE_MAX]
+        if to_hydrate:
+            await asyncio.gather(*[_hydrate(item) for item in to_hydrate])
+        for item in items:
+            _attach_tld_item_gst_fields(item)
 
     async def check_registration_domain(
         self,

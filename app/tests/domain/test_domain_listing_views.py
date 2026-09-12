@@ -35,7 +35,7 @@ async def test_record_view_increments_for_non_owner(mock_record):
     db = MagicMock()
 
     repo = SimpleNamespace(
-        get_by_id=AsyncMock(side_effect=[listing, _listing(views=3)]),
+        get_by_id=AsyncMock(return_value=listing),
         increment_views=AsyncMock(),
     )
     session = SimpleNamespace(commit=AsyncMock())
@@ -49,6 +49,7 @@ async def test_record_view_increments_for_non_owner(mock_record):
     )
 
     assert result.views == 3
+    assert repo.get_by_id.await_count == 1
     repo.increment_views.assert_awaited_once_with(listing.id)
     session.commit.assert_awaited_once()
     mock_record.assert_awaited_once()

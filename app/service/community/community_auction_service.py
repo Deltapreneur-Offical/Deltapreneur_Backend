@@ -1011,15 +1011,10 @@ class CommunityAuctionService:
 
     @staticmethod
     def get_active_auctions(db: Session) -> list[dict]:
-        auctions = CommunityAuctionRepository.find_all(db)
-        active_statuses = {
-            CommunityAuctionStatus.ACTIVE.value,
-            CommunityAuctionStatus.EXTENDED.value,
-        }
+        auctions = CommunityAuctionRepository.find_active(db)
         return [
             CommunityAuctionService._to_response(auction)
             for auction in auctions
-            if auction.status in active_statuses
         ]
 
     @staticmethod
