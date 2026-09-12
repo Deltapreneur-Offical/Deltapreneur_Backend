@@ -125,7 +125,21 @@ def _positive_int(value: int) -> int:
     return max(1, int(value))
 
 
-def _sync_connect_args() -> dict:
+def _postgres_host_requires_tls(url: str) -> bool:
+    """Remote Postgres (Supabase/RDS) needs TLS. Local CI Postgres does not.
+
+    GitHub Actions quality-gate and local laptops talk to localhost:5432
+    without SSL. Forcing sslmode=require there fails with
+    ``server does not support SSL, but SSL was required``.
+    """
+    try:
+        host = (urlparse(url).hostname or "").lower().strip("[]")
+    except Exception:
+        return True
+    return host not in {"localhost", "127.0.0.1", "::1", "postgres", "db"}
+
+
+def _sync_connect_args(url: str | None = None) -> dict:
     """psycopg2 connect_args: fail fast on dead/unreachable servers."""
     timeout_ms = _positive_int(settings.DB_COMMAND_TIMEOUT_SECONDS) * 1000
     args = {
@@ -134,8 +148,9 @@ def _sync_connect_args() -> dict:
         # Windows may attempt GSSAPI before TLS; that handshake then dies on
         # Supabase with "SSL connection has been closed unexpectedly".
         "gssencmode": "disable",
-        "sslmode": "require",
     }
+    if _postgres_host_requires_tls(url or DATABASE_URL):
+        args["sslmode"] = "require"
     return args
 
 

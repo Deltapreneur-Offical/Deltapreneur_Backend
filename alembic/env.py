@@ -20,6 +20,7 @@ from app.core.database import (
     Base,
     DATABASE_URL as NORMALIZED_DATABASE_URL,
     _normalize_supabase_pooler_url,
+    _sync_connect_args,
 )
 
 # User module
@@ -198,11 +199,9 @@ def run_migrations_online() -> None:
         # "SSL connection has been closed unexpectedly" and fails
         # `alembic upgrade head` on Render.
         use_native_hstore=False,
-        connect_args={
-            "connect_timeout": 15,
-            "gssencmode": "disable",
-            "sslmode": "require",
-        },
+        # Same host-aware TLS rules as the app engine: require SSL for
+        # Supabase/Render, never for GitHub Actions localhost Postgres.
+        connect_args=_sync_connect_args(),
     )
 
     with connectable.connect() as connection:

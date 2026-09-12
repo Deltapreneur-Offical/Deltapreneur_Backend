@@ -84,7 +84,8 @@ def test_alembic_env_disables_native_hstore() -> None:
     env_path = Path(__file__).resolve().parents[2] / "alembic" / "env.py"
     source = env_path.read_text(encoding="utf-8")
     assert "use_native_hstore=False" in source
-    assert "sslmode" in source
+    assert "_sync_connect_args" in source
+    assert '"sslmode": "require"' not in source
 
 
 def test_sync_connect_args_use_psycopg2_timeouts() -> None:
@@ -94,7 +95,18 @@ def test_sync_connect_args_use_psycopg2_timeouts() -> None:
         f"-c statement_timeout={settings.DB_COMMAND_TIMEOUT_SECONDS * 1000}"
     )
     assert args["gssencmode"] == "disable"
-    assert args["sslmode"] == "require"
+
+
+def test_sync_connect_args_require_tls_only_for_remote_hosts() -> None:
+    import app.core.database as db
+
+    local = db._sync_connect_args("postgresql://ci:ci@localhost:5432/cobrother_ci_app")
+    assert "sslmode" not in local
+
+    remote = db._sync_connect_args(
+        "postgresql://user:pass@aws-0-ap-northeast-2.pooler.supabase.com:6543/postgres"
+    )
+    assert remote["sslmode"] == "require"
 
 
 def test_async_connect_args_use_asyncpg_timeouts() -> None:
