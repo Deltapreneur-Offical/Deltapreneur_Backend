@@ -111,10 +111,25 @@ def _effective_pool_settings() -> tuple[int, int]:
             pool_size = max(pool_size, 10)
             max_overflow = max(max_overflow, 10)
             return pool_size, max_overflow
-        # Session pooler (:5432) — allow modest parallelism (handlers may open sync + async).
-        pool_size = min(max(pool_size, 3), 5)
-        max_overflow = min(max(max_overflow, 2), 3)
+        # Session pooler (:5432) — each pooled connection occupies a scarce
+        # Supabase session slot (often capped at ~15). Keep the client pool
+        # minimal so a Purchases-page fan-out cannot exhaust the pooler.
+        pool_size = 1
+        max_overflow = 1
     return pool_size, max_overflow
+
+
+def _session_pooler_uses_null_pool() -> bool:
+    """Session-mode pooler should not hold idle SQLAlchemy connections.
+
+    Idle QueuePool checkouts still count toward Supabase ``EMAXCONNSESSION``.
+    NullPool opens a connection per request and releases it immediately, which
+    is safer for local/dev session-mode URLs under parallel page loads.
+    """
+    return (
+        _uses_supabase_pooler(DATABASE_URL)
+        and _supabase_pooler_port(DATABASE_URL) == 5432
+    )
 
 
 def _pgbouncer_prepared_statement_name() -> str:
@@ -220,6 +235,9 @@ if _uses_supabase_pooler(DATABASE_URL):
         else:
             # Legacy behaviour — open/close per request.
             _sync_engine_kwargs["poolclass"] = NullPool
+    elif _session_pooler_uses_null_pool():
+        # Session pooler — do not hold idle clients against the session cap.
+        _sync_engine_kwargs["poolclass"] = NullPool
     else:
         # Session pooler (:5432) — keep SQLAlchemy pool tiny to respect session limits.
         _sync_engine_kwargs.update(_queue_pool_kwargs(_sync_pool_size, _sync_max_overflow))
@@ -291,6 +309,13 @@ if _uses_supabase_pooler(DATABASE_URL):
         else:
             # Legacy behaviour — no SQLAlchemy pooling.
             _async_engine_kwargs["poolclass"] = NullPool
+    elif _session_pooler_uses_null_pool():
+        # Session pooler — release each connection after the request so parallel
+        # Purchases-page calls do not exhaust Supabase session slots.
+        _async_engine_kwargs["poolclass"] = NullPool
+        _async_engine_kwargs["connect_args"] = _async_connect_args(
+            disable_statement_cache=True,
+        )
     else:
         # Session pooler (:5432) — keep SQLAlchemy pool; disable statement caches only.
         _async_engine_kwargs.update(
