@@ -35,7 +35,7 @@ from app.service.auth.smtp_diagnostics import (
     run_smtp_connectivity_test,
     safe_mail_config_diagnostic,
 )
-from app.service.resellportal.product_mapper import build_order_parameters, get_product_key, is_provider_mapped
+from app.service.resellportal.product_mapper import build_order_parameters, get_product_key, is_provider_mapped, validate_order_input
 from app.service.technology.provider_access import (
     access_email_payload,
     confirmation_email_kwargs,
@@ -514,6 +514,7 @@ def _build_seed_entities() -> list[TechnologyServiceEntity]:
             plans_json=json.dumps(item["plans"]),
             faqs_json=json.dumps(item["faqs"]),
             is_available=True,
+            provider_product_key=get_product_key(item["slug"]),
         )
         for item in DEFAULT_SERVICES_SEED
     ]
@@ -760,14 +761,13 @@ async def subscribe_technology_service(
     if not service:
         raise HTTPException(status_code=404, detail="Service not found")
 
-    if service.slug == "ai-business-suite":
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "AI Business Suite must be purchased through the Deltapreneur cart checkout flow "
-                "after Razorpay payment verification. Direct provider provisioning is disabled."
-            ),
-        )
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "Technology Services must be purchased through the Deltapreneur cart checkout flow "
+            "after Razorpay payment verification. Direct provider provisioning is disabled."
+        ),
+    )
 
     plans = json.loads(service.plans_json) if service.plans_json else []
     selected_plan = next((p for p in plans if p["code"] == payload.plan_code), None)
@@ -787,6 +787,16 @@ async def subscribe_technology_service(
             detail=(
                 f"{service.name} is not yet available through the automated provider. "
                 "Please contact support for manual activation."
+            ),
+        )
+
+    ok, missing = validate_order_input(service.slug, {})
+    if not ok:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{service.name} requires additional customer input before automated activation: "
+                f"{', '.join(missing)}."
             ),
         )
 
@@ -829,7 +839,7 @@ async def subscribe_technology_service(
         credentials_json=None,
         current_period_start=prov_res.get("current_period_start"),
         current_period_end=prov_res.get("current_period_end"),
-        auto_renew=True,
+        auto_renew=False,
         email_sent=False,
     )
     store_subscription_credentials(sub, prov_res.get("credentials") or {})
@@ -972,7 +982,11 @@ def renew_subscription(
     current_user: AppUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Renew subscription."""
+    """Renew subscription.
+
+    Explicit paid renewal checkout is not implemented for Technology Services.
+    Never debit the provider wallet from this customer endpoint.
+    """
     user_id = str(current_user.id)
     sub = db.query(TechnologySubscriptionEntity).filter(
         TechnologySubscriptionEntity.id == subscription_id,
@@ -983,36 +997,10 @@ def renew_subscription(
     if not sub:
         raise HTTPException(status_code=404, detail="Subscription not found")
 
-    # Only renewable subscriptions may be renewed: ACTIVE, with a real
-    # provider subscription id and a known period end.
-    if sub.status != "ACTIVE":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Subscription is not active (status={sub.status}); renewal is only allowed for ACTIVE subscriptions.",
-        )
-    if not sub.provider_subscription_id or str(sub.provider_subscription_id).startswith("SUB-DEFAULT"):
-        raise HTTPException(
-            status_code=400,
-            detail="Subscription has no valid provider reference; renewal cannot be processed.",
-        )
-    if sub.current_period_end is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Subscription has no current period end; renewal cannot be processed.",
-        )
-
-    client = get_resellportal_client()
-    prov_res = client.renew_subscription(
-        provider_sub_id=sub.provider_subscription_id,
-        billing_cycle=payload.billing_cycle,
+    raise HTTPException(
+        status_code=402,
+        detail="Paid Technology Service renewal checkout is not available yet. Contact support; do not pay again.",
     )
-
-    if prov_res.get("current_period_end"):
-        sub.current_period_end = prov_res["current_period_end"]
-    sub.status = "ACTIVE"
-    db.commit()
-
-    return {"success": True, "status": sub.status, "current_period_end": sub.current_period_end.isoformat() if sub.current_period_end else None}
 
 
 @router.post("/subscriptions/{subscription_id}/upgrade")
@@ -1022,7 +1010,11 @@ def upgrade_subscription(
     current_user: AppUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Upgrade subscription plan."""
+    """Upgrade subscription plan.
+
+    Explicit paid upgrade checkout is not implemented for Technology Services.
+    Never debit the provider wallet from this customer endpoint.
+    """
     user_id = str(current_user.id)
     sub = db.query(TechnologySubscriptionEntity).filter(
         TechnologySubscriptionEntity.id == subscription_id,
@@ -1033,16 +1025,10 @@ def upgrade_subscription(
     if not sub:
         raise HTTPException(status_code=404, detail="Subscription not found")
 
-    client = get_resellportal_client()
-    prov_res = client.upgrade_subscription(
-        provider_sub_id=sub.provider_subscription_id or "SUB-DEFAULT",
-        new_plan_code=payload.new_plan_code,
+    raise HTTPException(
+        status_code=402,
+        detail="Paid Technology Service upgrade checkout is not available yet. Contact support; do not pay again.",
     )
-
-    sub.plan_code = payload.new_plan_code
-    db.commit()
-
-    return {"success": True, "plan_code": sub.plan_code}
 
 
 @router.post("/subscriptions/{subscription_id}/cancel")
@@ -1062,8 +1048,15 @@ def cancel_subscription(
     if not sub:
         raise HTTPException(status_code=404, detail="Subscription not found")
 
-    client = get_resellportal_client()
-    client.cancel_subscription(provider_sub_id=sub.provider_subscription_id or "SUB-DEFAULT")
+    provider_id = str(sub.provider_subscription_id or "").strip()
+    if provider_id:
+        client = get_resellportal_client()
+        prov_res = client.cancel_subscription(provider_sub_id=provider_id)
+        if prov_res.get("success") is not True:
+            raise HTTPException(
+                status_code=502,
+                detail="Provider cancellation could not be confirmed. Please contact support.",
+            )
 
     sub.status = "CANCELLED"
     sub.auto_renew = False
@@ -1142,9 +1135,13 @@ def get_subscription_invoices(
 @router.post("/webhooks/resellportal")
 def handle_resellportal_webhook(payload: dict[str, Any]) -> dict[str, Any]:
     """Webhook callback endpoint for ResellPortal backend status sync."""
-    client = get_resellportal_client()
-    event = payload.get("event", "status_update")
-    return client.handle_webhook(event_type=event, payload=payload)
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail=(
+            "ResellPortal inbound webhooks are disabled until the provider "
+            "supplies a verifiable signature/authentication contract."
+        ),
+    )
 
 
 # -------------------------------------------------------------------
@@ -1186,7 +1183,10 @@ _PROVISIONING_LOGS = [
 
 
 @router.get("/admin/config")
-def get_admin_config(db: Session = Depends(get_db)) -> dict[str, Any]:
+def get_admin_config(
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
     """Get Admin Premium Tech configuration & reseller wallet status."""
     sub_count = 0
     try:
@@ -1224,7 +1224,10 @@ def get_admin_config(db: Session = Depends(get_db)) -> dict[str, Any]:
 
 
 @router.post("/admin/config")
-def update_admin_config(payload: AdminConfigUpdate) -> dict[str, Any]:
+def update_admin_config(
+    payload: AdminConfigUpdate,
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
+) -> dict[str, Any]:
     """Update Admin Premium Tech global margin & wallet balance."""
     if payload.global_margin_percent is not None:
         _ADMIN_CONFIG["global_margin_percent"] = payload.global_margin_percent
@@ -1232,12 +1235,15 @@ def update_admin_config(payload: AdminConfigUpdate) -> dict[str, Any]:
         _ADMIN_CONFIG["wallet_balance"] = payload.wallet_balance
     return {
         "success": True,
-        "config": get_admin_config(),
+        "config": dict(_ADMIN_CONFIG),
     }
 
 
 @router.get("/admin/services")
-def get_admin_services(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+def get_admin_services(
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
     """List catalogue services for Admin management with pricing overrides & margin."""
     ensure_catalogue_seeded_sync(db)
     try:
@@ -1273,6 +1279,7 @@ def get_admin_services(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
 def toggle_service_availability(
     slug: str,
     payload: AdminToggleService,
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Enable or disable a Premium Tech service."""
@@ -1300,6 +1307,7 @@ def toggle_service_availability(
 def override_service_price(
     slug: str,
     payload: AdminPriceOverride,
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Set custom price override for a specific service."""
@@ -1330,7 +1338,9 @@ def override_service_price(
 
 
 @router.get("/admin/wallet")
-def get_admin_wallet() -> dict[str, Any]:
+def get_admin_wallet(
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
+) -> dict[str, Any]:
     """Fetch live wallet balance & low balance warning status."""
     client = get_resellportal_client()
     return client.get_wallet_balance()
@@ -1440,7 +1450,10 @@ async def admin_resend_access_email(
 
 
 @router.get("/admin/subscriptions/needs-review")
-def get_admin_subscriptions_needing_review(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+def get_admin_subscriptions_needing_review(
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
     """Admin: subscriptions requiring attention (needs_review / needs-input / manual fulfillment)."""
     try:
         subs = db.query(TechnologySubscriptionEntity).filter(
@@ -1484,7 +1497,10 @@ def get_admin_orders(
 
 
 @router.get("/admin/renewals")
-def get_admin_renewals(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+def get_admin_renewals(
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
     """Fetch active customer subscriptions for renewal management."""
     try:
         subs = db.query(TechnologySubscriptionEntity).filter(
@@ -1513,7 +1529,10 @@ def get_admin_renewals(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
 
 
 @router.get("/admin/failed-provisioning")
-def get_admin_failed_provisioning(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+def get_admin_failed_provisioning(
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
     """Paid technology purchases whose provider activation has not completed.
 
     Includes CAPTURED + FAILED/PENDING/PROVISIONING rows even when
@@ -1555,6 +1574,7 @@ def get_admin_failed_provisioning(db: Session = Depends(get_db)) -> list[dict[st
 @router.post("/admin/failed-provisioning/{item_id}/retry")
 async def retry_failed_provisioning(
     item_id: str,
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
     db: AsyncSession = Depends(get_async_db),
 ) -> dict[str, Any]:
     """Retry provider activation for an existing paid subscription.
@@ -1577,6 +1597,7 @@ async def retry_failed_provisioning(
 @router.post("/admin/subscriptions/{subscription_id}/retry")
 async def admin_retry_subscription(
     subscription_id: str,
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
     db: AsyncSession = Depends(get_async_db),
 ) -> dict[str, Any]:
     """Admin: safely retry provisioning for a paid PENDING / PROVISIONING_FAILED subscription.
@@ -1633,6 +1654,7 @@ class AdminFulfillRequest(BaseModel):
 async def admin_fulfill_subscription(
     subscription_id: str,
     payload: AdminFulfillRequest,
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
     db: AsyncSession = Depends(get_async_db),
 ) -> dict[str, Any]:
     """Admin: manually fulfill a paid Technology Service (e.g. WordPress Plugin Pack).
@@ -1813,7 +1835,9 @@ async def admin_fulfill_subscription(
 
 
 @router.get("/admin/service-status")
-def get_admin_service_status() -> dict[str, Any]:
+def get_admin_service_status(
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
+) -> dict[str, Any]:
     """Get overall ResellPortal API integration health & connection status."""
     client = get_resellportal_client()
     is_configured = client.is_configured()
@@ -1838,7 +1862,9 @@ def get_admin_service_status() -> dict[str, Any]:
 
 
 @router.get("/admin/logs")
-def get_admin_logs() -> list[dict[str, Any]]:
+def get_admin_logs(
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
+) -> list[dict[str, Any]]:
     """Fetch provisioning and renewal logs for Admin console."""
     return list(_PROVISIONING_LOGS)
 

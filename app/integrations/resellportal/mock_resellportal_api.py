@@ -36,7 +36,13 @@ class MockResellPortalAPI:
         return {
             "success": True,
             "client_id": f"mock_cli_{secrets.token_hex(4)}",
+            "portal_login_url": "https://deltaosportal.deltapreneur.com/account",
+            "portal_credentials": {
+                "email": user_email,
+                "password": f"mock_portal_{secrets.token_urlsafe(12)}",
+            },
             "test_mode": test_mode,
+            "test_only": True,
             "is_mock": True,
         }
 
@@ -92,19 +98,47 @@ class MockResellPortalAPI:
         access_token = secrets.token_urlsafe(24)
         instance_id = secrets.token_hex(4)
 
-        # White-labelled URL under Deltapreneur/CoBrother namespace. Never put
-        # access_token in query parameters.
-        white_label_url = f"https://workspace.cobrother.com/app/{service_slug}/{instance_id}"
+        path_by_product = {
+            "ai-business-suite": "ai",
+            "website-builder": "sites",
+            "appointment-booking": "appointments",
+            "document-signer": "docsign",
+            "cloud-storage": "storage",
+            "business-phone": "phone",
+            "email-marketing": "email-marketing",
+            "social-media-automation": "social",
+            "reputation-management": "reputation",
+            "link-in-bio": "link-in-bio",
+            "web-hosting": "hosting",
+            "wordpress-plugin-pack": "plugins",
+            "ai_business_tools": "ai",
+            "website_builder": "sites",
+            "crm": "crm",
+            "invoice_ai": "invoice",
+            "appointments": "appointments",
+            "docsign": "docsign",
+            "cloud_storage": "storage",
+            "business_phone": "phone",
+            "vpn": "vpn",
+            "email_marketing": "email-marketing",
+            "social_media_automation": "social",
+            "reputation_management": "reputation",
+            "link_in_bio": "link-in-bio",
+            "web_hosting": "hosting",
+            "wp_plugin_installer": "plugins",
+        }
+        access_path = path_by_product.get(product_key or service_slug, service_slug)
+        white_label_url = f"https://deltaosportal.deltapreneur.com/{access_path}"
 
         credentials = {
             "username": user_email,
             "access_token": access_token,
+            "client_access_url": white_label_url,
             "custom_domain_supported": True,
             "provisioned_at": datetime.now(timezone.utc).isoformat(),
             "instructions": f"Access your white-labelled {service_name} dashboard via Deltapreneur.",
         }
         if str(service_slug or "").strip().lower().replace("_", "-") != "link-in-bio":
-            credentials["access_url"] = white_label_url
             credentials["account_id"] = f"cb_{user_id[:8]}"
 
         start_time = datetime.now(timezone.utc)
@@ -118,11 +152,14 @@ class MockResellPortalAPI:
             "service_id": service_id,
             "provider_order_id": provider_order_id,
             "provider_subscription_id": service_id,
-            "status": "ACTIVE",
+            "status": "TEST_SIMULATED" if test_mode else "ACTIVE",
             "current_period_start": start_time,
             "current_period_end": end_time,
+            "client_access_url": white_label_url,
             "credentials": credentials,
             "test_mode": test_mode,
+            "test_only": bool(test_mode),
+            "simulated": bool(test_mode),
             "is_mock": True,
         }
 

@@ -42,6 +42,18 @@ def test_resolved_webhook_secret_ignores_live_webhook_secret_alias():
     assert s.resolved_razorpay_webhook_secret() == ""
 
 
+def test_production_razorpay_resolution_ignores_sandbox_credentials():
+    s = _base_settings(
+        ENVIRONMENT="production",
+        RAZORPAY_SANDBOX_KEY_ID="rzp_test_should_not_win",
+        RAZORPAY_SANDBOX_KEY_SECRET="sandbox-secret",
+        RAZORPAY_LIVE_KEY_ID="rzp_live_correct",
+        RAZORPAY_LIVE_KEY_SECRET="live-secret",
+    )
+    assert s.resolved_razorpay_key_id() == "rzp_live_correct"
+    assert s.resolved_razorpay_key_secret() == "live-secret"
+
+
 def test_validate_runtime_warns_when_webhook_secret_missing(monkeypatch):
     from app.core.config import settings
 

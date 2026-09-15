@@ -21,6 +21,7 @@ RETRYABLE_PROVISIONING_STATUSES = (
     "PROVISIONING",
 )
 ACTIVE_PROVISIONING_STATUSES = {"ACTIVE"}
+SIMULATED_PROVISIONING_STATUSES = {"TEST_SIMULATED"}
 
 
 def _upper(value: Any) -> str:
@@ -77,6 +78,15 @@ def customer_activation_view(sub: Any, *, max_retries: int | None = None) -> dic
             "activationStatus": "ACTIVE",
             "activationStatusLabel": "Active",
             "completionStatus": "ACTIVE",
+            "provisioningStatus": status,
+        }
+
+    if status in SIMULATED_PROVISIONING_STATUSES:
+        return {
+            "paymentStatus": payment_out,
+            "activationStatus": "TEST_SIMULATED",
+            "activationStatusLabel": "Test Mode Simulation",
+            "completionStatus": "PENDING",
             "provisioningStatus": status,
         }
 
@@ -159,6 +169,7 @@ def retry_result_payload(sub: Any, outcome: str, *, error: Optional[str] = None)
         "access",
         "already_active",
         "needs_input",
+        "test_simulated",
     }
     return {
         "success": outcome in success_outcomes,

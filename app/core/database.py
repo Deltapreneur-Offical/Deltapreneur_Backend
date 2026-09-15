@@ -1,5 +1,5 @@
 from typing import AsyncGenerator
-from urllib.parse import quote, urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
 from sqlalchemy import create_engine
@@ -54,14 +54,15 @@ def _normalize_supabase_pooler_url(url: str) -> str:
     if "pooler.supabase.com" not in host or port != 5432:
         return raw
 
-    auth = ""
-    if parsed.username:
-        auth = quote(parsed.username, safe="")
-        if parsed.password is not None:
-            auth = f"{auth}:{quote(parsed.password, safe='')}"
-        auth = f"{auth}@"
+    userinfo = ""
+    if "@" in parsed.netloc:
+        userinfo = f"{parsed.netloc.rsplit('@', 1)[0]}@"
 
-    netloc = f"{auth}{parsed.hostname}:6543"
+    host = parsed.hostname or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+
+    netloc = f"{userinfo}{host}:6543"
     return urlunparse(
         (
             parsed.scheme,

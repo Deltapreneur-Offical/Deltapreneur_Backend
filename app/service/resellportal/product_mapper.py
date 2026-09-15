@@ -38,8 +38,17 @@ _CPANEL_MAX_LEN = 20
 # "any one of these groups is sufficient" (e.g. business-phone accepts an
 # area_code OR a phone_number, not both).
 REQUIRED_INPUT_KEYS: dict[str, tuple[tuple[str, ...], ...]] = {
+    "ai-business-suite": (("aiTools",),),
     "business-phone": (("areaCode",), ("phoneNumber",)),
+    "cloud-storage": (("storagePlan",),),
+    "document-signer": (("companyName",),),
+    "email-marketing": (("sendingPlan",), ("selectedPlan",), ("planCode",)),
+    "invoice-ai": (("subdomain",),),
+    "appointment-booking": (("subdomain",),),
+    "smm-growth": (("serviceId", "link", "quantity"),),
+    "esim": (("packageCode",),),
     "web-hosting": (("primaryDomain",),),
+    "wordpress-plugin-pack": (("pluginName", "author", "description", "logoUrl"),),
 }
 
 
@@ -64,8 +73,44 @@ PRODUCT_KEY_MAP: dict[str, str] = {
     "social-media-automation": "social_media_automation",
     "reputation-management": "reputation_management",
     "link-in-bio": "link_in_bio",
-    # "wordpress-plugin-pack": NOT AVAILABLE (404 invalid_product)
+    "wordpress-plugin-pack": "wp_plugin_installer",
 }
+
+CONFIRMED_PRODUCT_KEYS: set[str] = set(PRODUCT_KEY_MAP.values())
+
+_EMAIL_MARKETING_PLANS = {"starter", "growth", "pro", "business"}
+_CLOUD_STORAGE_PLANS = {"50gb", "100gb", "200gb", "500gb", "1tb", "2tb"}
+
+
+def _coerce_str_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item or "").strip()]
+    return []
+
+
+def _metadata_value(meta: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = meta.get(key)
+        if value is not None and str(value).strip():
+            return value
+    return None
+
+
+def _email_marketing_plan(
+    plan_code: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> str:
+    meta = metadata or {}
+    sending_plan = str(
+        _metadata_value(meta, "sendingPlan", "sending_plan", "planCode", "selectedPlan", "plan_code")
+        or plan_code
+        or ""
+    ).strip().lower()
+    return sending_plan if sending_plan in _EMAIL_MARKETING_PLANS else ""
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +122,9 @@ def _build_ai_business_tools_params(
     billing_cycle: str,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {"ai_tools": ["content-marketing-suite"]}
+    meta = metadata or {}
+    ai_tools = _coerce_str_list(meta.get("aiTools") or meta.get("ai_tools"))
+    return {"ai_tools": ai_tools} if ai_tools else {}
 
 
 def _build_website_builder_params(
@@ -105,6 +152,9 @@ def _build_web_hosting_params(
         derived = derive_cpanel_username(primary_domain)
         if derived:
             params["cpanel_username"] = derived
+    plan = str(meta.get("plan") or plan_code or "").strip().lower()
+    if primary_domain and plan:
+        params["plan"] = plan
     return params
 
 
@@ -114,10 +164,9 @@ def _build_cloud_storage_params(
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     meta = metadata or {}
-    storage_plan = str(meta.get("storagePlan") or plan_code or "100gb").strip().lower() or "100gb"
-    valid_plans = {"50gb", "100gb", "200gb", "500gb", "1tb", "2tb"}
-    if storage_plan not in valid_plans:
-        storage_plan = "100gb"
+    storage_plan = str(meta.get("storagePlan") or meta.get("storage_plan") or "").strip().lower()
+    if storage_plan not in _CLOUD_STORAGE_PLANS:
+        return {}
     return {"storage_plan": storage_plan}
 
 
@@ -126,6 +175,9 @@ def _build_email_marketing_params(
     billing_cycle: str,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    sending_plan = _email_marketing_plan(plan_code, metadata)
+    if sending_plan:
+        return {"sending_plan": sending_plan}
     return {}
 
 
@@ -135,8 +187,8 @@ def _build_esim_params(
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     meta = metadata or {}
-    package_code = str(meta.get("packageCode") or plan_code or "test-starter").strip() or "test-starter"
-    return {"package_code": package_code}
+    package_code = str(meta.get("packageCode") or "").strip()
+    return {"package_code": package_code} if package_code else {}
 
 
 def _build_smm_params(
@@ -145,10 +197,20 @@ def _build_smm_params(
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     meta = metadata or {}
-    service_id = str(meta.get("serviceId") or plan_code or "default").strip() or "default"
-    link = str(meta.get("link") or "https://example.com").strip()
-    quantity = int(meta.get("quantity") or 1)
-    return {"service_id": service_id, "link": link, "quantity": quantity}
+    service_id = str(meta.get("serviceId") or "").strip()
+    link = str(meta.get("link") or "").strip()
+    try:
+        quantity = int(meta.get("quantity") or 0)
+    except (TypeError, ValueError):
+        quantity = 0
+    params: dict[str, Any] = {}
+    if service_id:
+        params["service_id"] = service_id
+    if link:
+        params["link"] = link
+    if quantity > 0:
+        params["quantity"] = quantity
+    return params
 
 
 def _build_vpn_params(
@@ -157,10 +219,8 @@ def _build_vpn_params(
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     meta = metadata or {}
-    return {
-        "server_id": str(meta.get("serverId") or "").strip() or None,
-        "port_id": str(meta.get("portId") or "").strip() or None,
-    }
+    vpn_username = str(meta.get("vpnUsername") or "").strip()
+    return {"vpn_username": vpn_username} if vpn_username else {}
 
 
 def _build_crm_params(
@@ -169,7 +229,7 @@ def _build_crm_params(
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     meta = metadata or {}
-    business_name = str(meta.get("businessName") or "HubRegistrar").strip()
+    business_name = str(meta.get("businessName") or "").strip()
     if business_name:
         return {"business_name": business_name}
     return {}
@@ -181,10 +241,19 @@ def _build_invoice_ai_params(
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     meta = metadata or {}
-    business_name = str(meta.get("businessName") or "HubRegistrar").strip()
-    if business_name:
-        return {"business_name": business_name}
-    return {}
+    params: dict[str, Any] = {}
+    subdomain = str(meta.get("subdomain") or "").strip()
+    if subdomain:
+        params["subdomain"] = subdomain
+    for source_key, provider_key in (
+        ("businessName", "business_name"),
+        ("logoUrl", "logo_url"),
+        ("primaryColor", "primary_color"),
+    ):
+        value = str(meta.get(source_key) or "").strip()
+        if value:
+            params[provider_key] = value
+    return params
 
 
 def _build_appointments_params(
@@ -193,10 +262,20 @@ def _build_appointments_params(
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     meta = metadata or {}
-    business_name = str(meta.get("businessName") or "HubRegistrar").strip()
-    if business_name:
-        return {"business_name": business_name}
-    return {}
+    params: dict[str, Any] = {}
+    subdomain = str(meta.get("subdomain") or "").strip()
+    if subdomain:
+        params["subdomain"] = subdomain
+    for source_key, provider_key in (
+        ("businessName", "business_name"),
+        ("logoUrl", "logo_url"),
+        ("primaryColor", "primary_color"),
+        ("secondaryColor", "secondary_color"),
+    ):
+        value = str(meta.get(source_key) or "").strip()
+        if value:
+            params[provider_key] = value
+    return params
 
 
 def _build_docsign_params(
@@ -205,7 +284,7 @@ def _build_docsign_params(
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     meta = metadata or {}
-    company_name = str(meta.get("companyName") or "HubRegistrar").strip()
+    company_name = str(meta.get("companyName") or meta.get("company_name") or "").strip()
     if company_name:
         return {"company_name": company_name}
     return {}
@@ -253,6 +332,26 @@ def _build_link_in_bio_params(
     return {}
 
 
+def _build_wp_plugin_installer_params(
+    plan_code: str,
+    billing_cycle: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    meta = metadata or {}
+    mapping = {
+        "pluginName": "plugin_name",
+        "author": "author",
+        "description": "description",
+        "logoUrl": "logo_url",
+    }
+    params: dict[str, Any] = {}
+    for source_key, provider_key in mapping.items():
+        value = str(meta.get(source_key) or "").strip()
+        if value:
+            params[provider_key] = value
+    return params
+
+
 PARAM_BUILDERS: dict[str, Any] = {
     "ai_business_tools": _build_ai_business_tools_params,
     "website_builder": _build_website_builder_params,
@@ -270,6 +369,7 @@ PARAM_BUILDERS: dict[str, Any] = {
     "social_media_automation": _build_social_media_automation_params,
     "reputation_management": _build_reputation_management_params,
     "link_in_bio": _build_link_in_bio_params,
+    "wp_plugin_installer": _build_wp_plugin_installer_params,
 }
 
 
@@ -281,6 +381,27 @@ PARAM_BUILDERS: dict[str, Any] = {
 def get_product_key(service_slug: str) -> str | None:
     """Return the ResellPortal product_key for a HubRegistrar service slug."""
     return PRODUCT_KEY_MAP.get(service_slug)
+
+
+def is_confirmed_product_key(product_key: str | None) -> bool:
+    """Return True only for product keys in the confirmed ResellPortal contract."""
+    return str(product_key or "").strip() in CONFIRMED_PRODUCT_KEYS
+
+
+def resolve_product_key(service_slug: str, configured_product_key: str | None = None) -> str | None:
+    """Resolve the safe provider key for a catalogue service.
+
+    The hard-coded contract mapping is authoritative for the 17 supported
+    catalogue slugs. A DB override is accepted only for slugs that do not have
+    a local mapping and only when the override itself is a confirmed provider
+    key.
+    """
+    mapped = get_product_key(service_slug)
+    if mapped:
+        return mapped
+    if is_confirmed_product_key(configured_product_key):
+        return str(configured_product_key).strip()
+    return None
 
 
 def build_order_parameters(
@@ -346,11 +467,18 @@ def validate_order_input(
     declared requirements always pass.
     """
     meta = metadata or {}
+    if service_slug == "ai-business-suite":
+        return (True, []) if _coerce_str_list(meta.get("aiTools") or meta.get("ai_tools")) else (False, ["aiTools"])
+    if service_slug == "cloud-storage":
+        storage_plan = str(meta.get("storagePlan") or meta.get("storage_plan") or "").strip().lower()
+        return (True, []) if storage_plan in _CLOUD_STORAGE_PLANS else (False, ["storagePlan"])
+    if service_slug == "email-marketing":
+        return (True, []) if _email_marketing_plan(metadata=meta) else (False, ["sendingPlan"])
     groups = REQUIRED_INPUT_KEYS.get(service_slug)
     if not groups:
         return True, []
     for group in groups:
-        if all(str(meta.get(k) or "").strip() for k in group):
+        if all(str(_metadata_value(meta, k) or "").strip() for k in group):
             return True, []
     # Nothing satisfied: report the smallest group's keys as missing guidance.
     missing = sorted(min(groups, key=len))
