@@ -169,3 +169,53 @@ def test_domain_all_with_page_size(domain_client) -> None:
     assert body["page"] == 2
     assert body["page_size"] == 2
     assert len(body["items"]) == 2
+
+
+class _FakeShowcaseMerge:
+    def __init__(self, db) -> None:
+        self.db = db
+
+    async def fetch_homepage_rows(self):
+        return [{
+            "id": "sc1",
+            "source": "openprovider_showcase",
+            "showcaseId": "sc1",
+            "domainName": "prem.com",
+            "domain_name": "prem.com",
+        }]
+
+    def merge_into_feed(self, serialized, showcase_rows):
+        return list(showcase_rows) + list(serialized)
+
+
+def test_featured_only_default_still_merges_showcase(domain_client, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.controller.domain.domain_controller.ShowcaseHomepageIntegration",
+        _FakeShowcaseMerge,
+    )
+    res = domain_client.get("/api/v1/domain/all", params={"featured_only": True})
+    assert res.status_code == 200
+    body = res.json()
+    sources = [row.get("source") for row in body["data"]]
+    assert "openprovider_showcase" in sources
+    assert body["data"][0]["domainName"] == "prem.com"
+
+
+def test_featured_only_include_showcase_false_skips_merge(domain_client, monkeypatch) -> None:
+    class _MustNotRun:
+        def __init__(self, db) -> None:
+            raise AssertionError("showcase merge must not run when include_showcase=false")
+
+    monkeypatch.setattr(
+        "app.controller.domain.domain_controller.ShowcaseHomepageIntegration",
+        _MustNotRun,
+    )
+    res = domain_client.get(
+        "/api/v1/domain/all",
+        params={"featured_only": True, "include_showcase": False},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["success"] is True
+    assert len(body["data"]) == 5
+    assert all(row.get("source") != "openprovider_showcase" for row in body["data"])
