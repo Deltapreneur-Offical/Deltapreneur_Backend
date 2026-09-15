@@ -46,7 +46,7 @@ class MarketplaceDomainService:
     ) -> tuple[int, list[DomainListing]]:
         """Return (total, items). When page_size is None, returns all active rows."""
         if featured_only:
-            items = list(await self._repo.list_homepage_featured())
+            items = list(await self._repo.list_homepage_featured(limit=page_size))
             return len(items), items
 
         if page_size is None:

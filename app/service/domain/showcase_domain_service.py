@@ -1162,7 +1162,10 @@ class ShowcaseDomainService:
             "currency": (row.price_snapshot_json or {}).get("currency") or "INR",
         }
 
-    async def list_public(self) -> tuple[list[dict[str, Any]], bool]:
+    async def list_public(
+        self,
+        page_size: int | None = None,
+    ) -> tuple[list[dict[str, Any]], bool]:
         """Public showcase feed — only selected+available rows, only when enabled."""
         if not await self.table_available():
             return [], False
@@ -1170,7 +1173,7 @@ class ShowcaseDomainService:
         enabled = bool(cfg.get("enabled"))
         if not enabled:
             return [], False
-        rows = await self._repo.list_selected()
+        rows = await self._repo.list_selected(limit=page_size)
         return [self.to_public_dict(r) for r in rows], True
 
     # ------------------------------------------------------- admin operations

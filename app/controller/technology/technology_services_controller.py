@@ -589,12 +589,18 @@ def _fallback_service_id(slug: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"cobrother:technology-service:{slug}"))
 
 
-def _get_fallback_services(category: Optional[str] = None, featured_only: bool = False) -> list[dict[str, Any]]:
+def _get_fallback_services(
+    category: Optional[str] = None,
+    featured_only: bool = False,
+    page_size: Optional[int] = None,
+) -> list[dict[str, Any]]:
     items = DEFAULT_SERVICES_SEED
     if category and category.lower() != "all":
         items = [s for s in items if s["category"].lower() == category.lower()]
     if featured_only:
         items = [s for s in items if s.get("is_featured")]
+    elif page_size is not None:
+        items = sorted(items, key=lambda s: (not bool(s.get("is_featured")), s.get("display_order", 0)))
 
     result = []
     for s in items:
@@ -615,6 +621,8 @@ def _get_fallback_services(category: Optional[str] = None, featured_only: bool =
             "status": "ACTIVE",
             "provider_product_key": get_product_key(s["slug"]),
         })
+    if page_size is not None:
+        result = result[: max(1, int(page_size))]
     return result
 
 
@@ -626,10 +634,16 @@ def _get_fallback_services(category: Optional[str] = None, featured_only: bool =
 def list_technology_services(
     category: Optional[str] = Query(None, description="Filter by category"),
     featured_only: bool = Query(False, description="Filter only featured items for homepage"),
+    page_size: Optional[int] = Query(
+        None,
+        ge=1,
+        le=200,
+        description="Omit to return the full catalogue (legacy). Set to limit.",
+    ),
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
     """List all available Technology Services from catalogue."""
-    cache_key = f"tech-services:{category or 'all'}:{int(featured_only)}"
+    cache_key = f"tech-services:{category or 'all'}:{int(featured_only)}:{page_size}"
     cached = public_list_cache_get(cache_key)
     if cached is not None:
         return cached
@@ -644,10 +658,23 @@ def list_technology_services(
         if featured_only:
             query = query.filter(TechnologyServiceEntity.is_featured == True)
 
-        services = query.order_by(TechnologyServiceEntity.display_order.asc()).all()
+        if page_size is not None and not featured_only:
+            query = query.order_by(
+                TechnologyServiceEntity.is_featured.desc(),
+                TechnologyServiceEntity.display_order.asc(),
+            )
+        else:
+            query = query.order_by(TechnologyServiceEntity.display_order.asc())
+        if page_size is not None:
+            query = query.limit(max(1, int(page_size)))
+        services = query.all()
 
         if not services:
-            result = _get_fallback_services(category=category, featured_only=featured_only)
+            result = _get_fallback_services(
+                category=category,
+                featured_only=featured_only,
+                page_size=page_size,
+            )
             public_list_cache_put(cache_key, result)
             return result
 
@@ -678,7 +705,11 @@ def list_technology_services(
         return result
     except Exception as err:
         logger.warning("Error fetching technology services from DB, serving fallback catalogue: %s", err)
-        result = _get_fallback_services(category=category, featured_only=featured_only)
+        result = _get_fallback_services(
+            category=category,
+            featured_only=featured_only,
+            page_size=page_size,
+        )
         public_list_cache_put(cache_key, result)
         return result
 

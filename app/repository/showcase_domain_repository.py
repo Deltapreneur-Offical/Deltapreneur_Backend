@@ -138,7 +138,11 @@ class ShowcaseDomainRepository:
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
-    async def list_selected(self) -> Sequence[OpenProviderShowcaseDomain]:
+    async def list_selected(
+        self,
+        *,
+        limit: int | None = None,
+    ) -> Sequence[OpenProviderShowcaseDomain]:
         """Public feed source: only selected, not-deleted, available rows."""
         stmt = (
             select(OpenProviderShowcaseDomain)
@@ -152,6 +156,8 @@ class ShowcaseDomainRepository:
                 OpenProviderShowcaseDomain.domain_name.asc(),
             )
         )
+        if limit is not None:
+            stmt = stmt.limit(max(1, int(limit)))
         return (await self._session.execute(stmt)).scalars().all()
 
     async def list_selected_for_refresh(
