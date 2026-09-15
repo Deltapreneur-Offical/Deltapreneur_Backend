@@ -189,6 +189,12 @@ async def list_all_domain_listings(
 
 @router.get("/showcase")
 async def list_openprovider_showcase(
+    page_size: int | None = Query(
+        None,
+        ge=1,
+        le=200,
+        description="Omit to return all selected showcase domains (legacy). Set to limit.",
+    ),
     db: AsyncSession = Depends(get_async_db),
 ) -> dict:
     """Public OpenProvider Premium Showcase feed.
@@ -199,12 +205,13 @@ async def list_openprovider_showcase(
     the DOMAIN_REGISTRATION flow (never marketplace escrow). No internal
     OpenProvider/commission data is exposed.
     """
-    cached = public_list_cache_get("domains:showcase")
+    cache_key = f"domains:showcase:{page_size}"
+    cached = public_list_cache_get(cache_key)
     if cached is not None:
         return cached
     svc = ShowcaseDomainService(db)
     read_only = svc.read_only_mode() or not await svc.table_available()
-    items, enabled = await svc.list_public()
+    items, enabled = await svc.list_public(page_size=page_size)
     payload = {
         "success": True,
         "enabled": enabled,
@@ -213,7 +220,7 @@ async def list_openprovider_showcase(
         "data": items,
         "total": len(items),
     }
-    public_list_cache_put("domains:showcase", payload)
+    public_list_cache_put(cache_key, payload)
     return payload
 
 

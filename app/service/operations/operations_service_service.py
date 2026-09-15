@@ -50,8 +50,16 @@ class OperationsServiceService:
     def _default_icon(category: str) -> str:
         return CATEGORY_DEFAULT_ICONS.get(category.lower(), "Headset")
 
-    async def list_public(self, *, service_type: str | None = None) -> list[dict]:
-        rows = await self._repo.list_public(service_type=service_type)
+    async def list_public(
+        self,
+        *,
+        service_type: str | None = None,
+        page_size: int | None = None,
+    ) -> list[dict]:
+        rows = await self._repo.list_public(
+            service_type=service_type,
+            page_size=page_size,
+        )
         return [self._serialize(row) for row in rows]
 
     async def get_public(self, service_id: uuid.UUID) -> dict:

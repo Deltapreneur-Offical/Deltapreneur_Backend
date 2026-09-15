@@ -141,10 +141,30 @@ async def test_list_public_filters_by_compliance_service_type():
     with patch.object(service._repo, "list_public", new=list_public):
         items = await service.list_public(service_type="compliance")
 
-    list_public.assert_awaited_once_with(service_type="compliance")
+    list_public.assert_awaited_once_with(service_type="compliance", page_size=None)
     assert len(items) == 1
     assert items[0]["name"] == "GST Registration"
     assert items[0]["serviceType"] == "compliance"
+
+
+@pytest.mark.asyncio
+async def test_list_public_forwards_page_size():
+    session = MagicMock()
+    service = OperationsServiceService(session)
+    compliance_row = _row(
+        name="GST Registration",
+        category="compliance",
+        price=3000.0,
+        service_type="compliance",
+        skills="GST_REGISTRATION",
+    )
+    list_public = AsyncMock(return_value=[compliance_row])
+
+    with patch.object(service._repo, "list_public", new=list_public):
+        items = await service.list_public(service_type="compliance", page_size=8)
+
+    list_public.assert_awaited_once_with(service_type="compliance", page_size=8)
+    assert len(items) == 1
 
 
 @pytest.mark.asyncio

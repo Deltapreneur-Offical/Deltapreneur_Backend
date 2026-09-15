@@ -26,6 +26,7 @@ from app.model.cocreation.cocreation_response import SoftwareResponse
 from app.model.cocreation.software_mapper import build_software_response
 from app.service.admin.admin_forward_service import forward_to_cobrother
 from app.model.marketplace.domain_listing_response import DomainVerificationResponse
+from app.service.admin.homepage_feature_limit import is_homepage_feature_limit_error
 from app.service.admin.admin_service import (
     admin_mark_domain_verified,
     admin_mark_domain_unverified,
@@ -63,6 +64,12 @@ router = APIRouter(
     prefix="/api/v1/admin",
     tags=["Admin"]
 )
+
+
+def _admin_feature_result(result):
+    if is_homepage_feature_limit_error(result):
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content=result)
+    return result
 
 
 @router.get("/cobrothers")
@@ -440,7 +447,7 @@ async def toggle_domain(
     db: Session = Depends(get_db),
     _admin: AppUser = Depends(require_role(["ADMIN"])),
 ):
-    return await toggle_domain_homepage(db, entity_id)
+    return _admin_feature_result(await toggle_domain_homepage(db, entity_id))
 
 
 @router.post("/venture/{entity_id}/toggle-homepage")
@@ -449,7 +456,7 @@ async def toggle_venture(
     db: Session = Depends(get_db),
     _admin: AppUser = Depends(require_role(["ADMIN"])),
 ):
-    return await toggle_venture_homepage(db, entity_id)
+    return _admin_feature_result(await toggle_venture_homepage(db, entity_id))
 
 
 @router.post("/software/{entity_id}/toggle-homepage")
@@ -458,7 +465,7 @@ async def toggle_software(
     db: Session = Depends(get_db),
     _admin: AppUser = Depends(require_role(["ADMIN"])),
 ):
-    return await toggle_software_homepage(db, entity_id)
+    return _admin_feature_result(await toggle_software_homepage(db, entity_id))
 
 
 @router.post("/feature")
@@ -467,11 +474,13 @@ async def feature_toggle(
     db: Session = Depends(get_db),
     _admin: AppUser = Depends(require_role(["ADMIN"])),
 ):
-    return await set_featured(
-        db=db,
-        entity_type=body.type,
-        entity_id=body.entityId,
-        featured=str(body.featured).lower() == "true",
+    return _admin_feature_result(
+        await set_featured(
+            db=db,
+            entity_type=body.type,
+            entity_id=body.entityId,
+            featured=str(body.featured).lower() == "true",
+        )
     )
 
 
