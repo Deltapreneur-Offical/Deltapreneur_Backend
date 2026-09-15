@@ -535,6 +535,11 @@ class CartService:
                     raise AppException("This technology is not available.", status_code=400)
                 if software.purchase_type == SoftwarePurchaseType.AUCTION:
                     raise AppException("Auction items cannot be added to cart.", status_code=400)
+                from app.service.cocreation.technology_verification_guard import (
+                    assert_technology_purchasable,
+                )
+
+                assert_technology_purchasable(software)
             else:
                 tech_service = await self._get_technology_service(product_id)
                 if tech_service is None:

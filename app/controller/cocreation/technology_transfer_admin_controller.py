@@ -76,3 +76,14 @@ async def release_payout(
         transaction_reference_number=body.transaction_reference_number,
         notes=body.notes,
     )
+
+
+@router.post("/{transaction_id}/process-refund")
+async def process_technology_refund(
+    transaction_id: uuid.UUID,
+    admin: AppUser = Depends(require_role(["ADMIN"])),
+    db: AsyncSession = Depends(get_async_db),
+) -> dict:
+    from app.service.cocreation.cocreation_payment_service import CocreationPaymentService
+
+    return await CocreationPaymentService(db).admin_refund(transaction_id, admin=admin)

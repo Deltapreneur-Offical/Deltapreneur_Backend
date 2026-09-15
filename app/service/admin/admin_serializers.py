@@ -171,6 +171,7 @@ def serialize_technology_listing(software: Any) -> dict[str, Any]:
         "featured": bool(software.featured),
         "verified": bool(getattr(software, "verified", False)),
         "verifiedAt": software.verified_at.isoformat() if getattr(software, "verified_at", None) else None,
+        "rejected": bool(getattr(software, "rejected", False)),
         "views": int(getattr(software, "views", 0) or 0),
         "category": (
             software.category.value

@@ -268,6 +268,7 @@ def admin_mark_technology_verified(db: Session, software_id: UUID) -> dict:
     now = datetime.now(timezone.utc)
     software.verified = True
     software.verified_at = now
+    software.rejected = False
     software.updated_at = now
     db.commit()
 
@@ -309,6 +310,26 @@ def admin_mark_technology_unverified(db: Session, software_id: UUID) -> dict:
         "message": "Technology listing marked as unverified and removed from homepage features.",
         "featured": False,
         "verified": False,
+    }
+
+
+def admin_mark_technology_rejected(db: Session, software_id: UUID) -> dict:
+    software = db.query(Software).filter(Software.id == software_id).first()
+    if software is None or software.is_deleted:
+        return {"success": False, "error": "Technology listing not found"}
+    now = datetime.now(timezone.utc)
+    software.verified = False
+    software.verified_at = None
+    software.rejected = True
+    software.featured = False
+    software.updated_at = now
+    db.commit()
+    return {
+        "success": True,
+        "message": "Technology listing rejected.",
+        "verified": False,
+        "rejected": True,
+        "featured": False,
     }
 
 

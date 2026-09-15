@@ -11,6 +11,7 @@ from app.entity.cocreation.software_purchase_entity import SoftwarePurchase
 from app.model.marketplace.transfer_mapper import _user_summary
 from app.repository.seller_payout_profile_repository import SellerPayoutProfileRepository
 from app.service.payout.seller_payout_profile_service import SellerPayoutProfileService
+from app.utils.cocreation_enums import SoftwarePaymentStatus
 from app.utils.transfer_enums import MarketplaceEscrowStatus, MarketplaceTransferStatus
 
 
@@ -28,11 +29,21 @@ class TechnologyTransferAdminService:
         escrow_status = MarketplaceEscrowStatus.HELD
         if purchase.seller_paid_at:
             escrow_status = MarketplaceEscrowStatus.RELEASED
-            
-        transfer_status = MarketplaceTransferStatus.COMPLETED
-        if not purchase.seller_paid_at:
-            transfer_status = MarketplaceTransferStatus.PAYOUT_PENDING
-        if purchase.payout_approved_at and not purchase.seller_paid_at:
+        if purchase.payment_status == SoftwarePaymentStatus.REFUNDED or purchase.refund_completed_at:
+            escrow_status = MarketplaceEscrowStatus.REFUNDED
+
+        transfer_status = MarketplaceTransferStatus.PAYOUT_PENDING
+        if purchase.payment_status == SoftwarePaymentStatus.REFUNDED or purchase.refund_completed_at:
+            transfer_status = MarketplaceTransferStatus.REFUNDED
+        elif purchase.payment_status == SoftwarePaymentStatus.CANCELLED:
+            transfer_status = MarketplaceTransferStatus.CANCELLED
+        elif purchase.payment_status != SoftwarePaymentStatus.COMPLETED:
+            transfer_status = MarketplaceTransferStatus.CANCELLED
+            if purchase.payment_status == SoftwarePaymentStatus.CREATED:
+                transfer_status = MarketplaceTransferStatus.PAYMENT_COMPLETED
+        elif purchase.seller_paid_at:
+            transfer_status = MarketplaceTransferStatus.COMPLETED
+        elif purchase.payout_approved_at:
             transfer_status = MarketplaceTransferStatus.PAYOUT_APPROVED
 
         # For mapping domain listing ID in the UI to something recognizable
@@ -50,6 +61,8 @@ class TechnologyTransferAdminService:
             "sellerPayoutInr": purchase.seller_payout_inr,
             "razorpayOrderId": purchase.razorpay_order_id,
             "razorpayPaymentId": purchase.razorpay_payment_id,
+            "paymentStatus": purchase.payment_status.value if purchase.payment_status else None,
+            "completionStatus": purchase.completion_status.value if purchase.completion_status else None,
             "escrowStatus": escrow_status.value,
             "transferStatus": transfer_status.value,
             "transferMethod": None,
@@ -71,7 +84,7 @@ class TechnologyTransferAdminService:
             "adminReviewReason": None,
             "sellerPaidAt": purchase.seller_paid_at.isoformat() if purchase.seller_paid_at else None,
             "payoutApprovedAt": purchase.payout_approved_at.isoformat() if purchase.payout_approved_at else None,
-            "refundCompletedAt": None,
+            "refundCompletedAt": purchase.refund_completed_at.isoformat() if purchase.refund_completed_at else None,
             "hasAuthCode": False,
             "authCode": None,
             "createdAt": purchase.created_at.isoformat() if purchase.created_at else None,
