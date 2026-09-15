@@ -1,4 +1,4 @@
-"""Alembic graph tests for the reconstructed techmkt001 revision."""
+"""Alembic graph tests for the legacy ``techmkt001`` locator revision."""
 
 from __future__ import annotations
 
@@ -8,10 +8,26 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 
 
+TECHMKT001_LOCATOR = (
+    "2026_09_15_1710-techmkt001_locate_legacy_alembic_stamp.py"
+)
+
+
 def _script() -> ScriptDirectory:
     root = Path(__file__).resolve().parents[2]
     cfg = Config(str(root / "alembic.ini"))
     return ScriptDirectory.from_config(cfg)
+
+
+def test_only_one_techmkt001_revision_file_exists():
+    root = Path(__file__).resolve().parents[2]
+    matches = []
+    for path in sorted((root / "alembic" / "versions").glob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        if 'revision: str = "techmkt001"' in text or "revision = 'techmkt001'" in text:
+            matches.append(path.name)
+
+    assert matches == [TECHMKT001_LOCATOR]
 
 
 def test_techmkt001_revision_is_discoverable():
