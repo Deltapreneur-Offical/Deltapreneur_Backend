@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from app.utils.domain_gst import domain_price_breakdown, order_gst_payload
+from app.utils.domain_gst import domain_price_breakdown, gst_inclusive_total_inr, order_gst_payload
 
 
 def test_domain_price_breakdown_marketplace_10000_example():
@@ -46,6 +46,24 @@ def test_domain_price_breakdown_multi_year():
     assert result["subtotalInr"] == 200.0
     assert result["gstInr"] == 36.0
     assert result["totalInr"] == 236.0
+
+
+def test_gst_inclusive_total_inr_575_example():
+    with patch("app.utils.domain_gst.settings") as mock_settings:
+        mock_settings.DOMAIN_GST_ENABLED = True
+        mock_settings.DOMAIN_GST_RATE = 18.0
+        mock_settings.DOMAIN_PRICE_GST_INCLUSIVE = False
+
+        assert gst_inclusive_total_inr(575.0) == 678.5
+
+
+def test_gst_inclusive_total_inr_disabled_equals_unit():
+    with patch("app.utils.domain_gst.settings") as mock_settings:
+        mock_settings.DOMAIN_GST_ENABLED = False
+        mock_settings.DOMAIN_GST_RATE = 18.0
+        mock_settings.DOMAIN_PRICE_GST_INCLUSIVE = False
+
+        assert gst_inclusive_total_inr(575.0) == 575.0
 
 
 def test_domain_price_breakdown_disabled():

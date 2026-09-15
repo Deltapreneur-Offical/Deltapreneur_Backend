@@ -24,6 +24,9 @@ def test_becobrother_join_saves_and_emails(client):
         "equipment": True,
     }
     with patch(
+        "app.core.config.Settings.mail_configured",
+        return_value=True,
+    ), patch(
         "app.service.becobrother.be_cobrother_service.MailService.send_becobrother_application_email",
         new_callable=AsyncMock,
     ) as send_mail:

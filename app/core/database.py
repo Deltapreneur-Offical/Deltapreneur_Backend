@@ -33,13 +33,40 @@ def _supabase_pooler_port(url: str) -> int | None:
     return None
 
 
-def _normalize_supabase_pooler_url(url: str) -> str:
-    """Prefer Supabase transaction pooler (:6543) over session mode (:5432).
+def _prefer_supabase_session_pooler() -> bool:
+    """Local laptops should use session mode; production stays on transaction mode.
 
-    Render deploys can briefly overlap old/new instances plus migrations, and
-    the session pooler has a strict client cap. Transaction mode combined with
-    ``NullPool`` keeps the app and Alembic from pinning scarce sessions.
+    The Supabase transaction pooler (:6543) often closes SSL mid-handshake from
+    developer machines (``SSL connection has been closed unexpectedly`` /
+    asyncpg ``TimeoutError`` during JSON codec setup). Session mode (:5432)
+    stays stable locally. Render/production still prefer :6543 because the
+    session pooler has a stricter client cap during overlapping deploys.
     """
+    env = (getattr(settings, "ENVIRONMENT", "") or "").strip().lower()
+    return env in {"development", "dev", "local"}
+
+
+def _with_supabase_pooler_port(url: str, port: int) -> str:
+    """Change only the pooler port. Leave userinfo encoding untouched.
+
+    Re-quoting ``postgres.<project-ref>`` or ``%40`` passwords corrupts the
+    URL (dots become ``%2E``, ``%40`` becomes ``%2540``) and login fails.
+    """
+    parsed = urlparse(url)
+    host = parsed.hostname
+    old_port = parsed.port or 5432
+    if not host:
+        return url
+    old_suffix = f"{host}:{old_port}"
+    new_suffix = f"{host}:{port}"
+    netloc = parsed.netloc
+    if not netloc.endswith(old_suffix):
+        return url
+    return urlunparse(parsed._replace(netloc=netloc[: -len(old_suffix)] + new_suffix))
+
+
+def _normalize_supabase_pooler_url(url: str) -> str:
+    """Pick the Supabase pooler port that matches the runtime environment."""
     raw = (url or "").strip()
     if not raw:
         return raw
@@ -51,28 +78,17 @@ def _normalize_supabase_pooler_url(url: str) -> str:
     except Exception:
         return raw
 
-    if "pooler.supabase.com" not in host or port != 5432:
+    if "pooler.supabase.com" not in host:
         return raw
 
-    userinfo = ""
-    if "@" in parsed.netloc:
-        userinfo = f"{parsed.netloc.rsplit('@', 1)[0]}@"
+    if _prefer_supabase_session_pooler():
+        if port == 6543:
+            return _with_supabase_pooler_port(raw, 5432)
+        return raw
 
-    host = parsed.hostname or ""
-    if ":" in host and not host.startswith("["):
-        host = f"[{host}]"
-
-    netloc = f"{userinfo}{host}:6543"
-    return urlunparse(
-        (
-            parsed.scheme,
-            netloc,
-            parsed.path,
-            parsed.params,
-            parsed.query,
-            parsed.fragment,
-        )
-    )
+    if port == 5432:
+        return _with_supabase_pooler_port(raw, 6543)
+    return raw
 
 
 # Respect DATABASE_URL, but normalize Supabase pooler URLs to the safer
@@ -88,7 +104,12 @@ def _effective_pool_settings() -> tuple[int, int]:
     max_overflow = settings.DB_MAX_OVERFLOW
     if _uses_supabase_pooler(DATABASE_URL):
         if _supabase_pooler_port(DATABASE_URL) == 6543:
-            # Transaction pooler — NullPool is used; these values are ignored.
+            # Transaction pooler — pgbouncer multiplexes many clients onto few
+            # server connections, so we can hold a wider client-side pool to
+            # absorb a bursty page load (~10 parallel queries) plus background
+            # workers without connecting per request.
+            pool_size = max(pool_size, 10)
+            max_overflow = max(max_overflow, 10)
             return pool_size, max_overflow
         # Session pooler (:5432) — allow modest parallelism (handlers may open sync + async).
         pool_size = min(max(pool_size, 3), 5)
@@ -104,13 +125,33 @@ def _positive_int(value: int) -> int:
     return max(1, int(value))
 
 
-def _sync_connect_args() -> dict:
+def _postgres_host_requires_tls(url: str) -> bool:
+    """Remote Postgres (Supabase/RDS) needs TLS. Local CI Postgres does not.
+
+    GitHub Actions quality-gate and local laptops talk to localhost:5432
+    without SSL. Forcing sslmode=require there fails with
+    ``server does not support SSL, but SSL was required``.
+    """
+    try:
+        host = (urlparse(url).hostname or "").lower().strip("[]")
+    except Exception:
+        return True
+    return host not in {"localhost", "127.0.0.1", "::1", "postgres", "db"}
+
+
+def _sync_connect_args(url: str | None = None) -> dict:
     """psycopg2 connect_args: fail fast on dead/unreachable servers."""
     timeout_ms = _positive_int(settings.DB_COMMAND_TIMEOUT_SECONDS) * 1000
-    return {
+    args = {
         "connect_timeout": _positive_int(settings.DB_CONNECT_TIMEOUT_SECONDS),
         "options": f"-c statement_timeout={timeout_ms}",
+        # Windows may attempt GSSAPI before TLS; that handshake then dies on
+        # Supabase with "SSL connection has been closed unexpectedly".
+        "gssencmode": "disable",
     }
+    if _postgres_host_requires_tls(url or DATABASE_URL):
+        args["sslmode"] = "require"
+    return args
 
 
 def _async_connect_args(
@@ -158,15 +199,37 @@ _sync_engine_kwargs: dict = {
     "connect_args": _sync_connect_args(),
 }
 
+def _transaction_pooler_reuse_enabled() -> bool:
+    """Whether to keep a bounded QueuePool on the Supabase transaction pooler.
+
+    NullPool opened a fresh TCP+TLS connection per request, so a bursty page
+    load hammered the pooler and intermittently timed out. A small QueuePool
+    reuses connections and is safe with pgbouncer transaction mode as long as
+    prepared-statement caching stays disabled (handled in _async_connect_args).
+    """
+    return bool(getattr(settings, "DB_POOLER_REUSE_CONNECTIONS", True))
+
+
 if _uses_supabase_pooler(DATABASE_URL):
     if _supabase_pooler_port(DATABASE_URL) == 6543:
-        # Transaction pooler — open/close per request so parallel HTTP handlers don't queue.
-        _sync_engine_kwargs["poolclass"] = NullPool
+        if _transaction_pooler_reuse_enabled():
+            # Transaction pooler — reuse a small pool instead of connecting per request.
+            _sync_engine_kwargs.update(
+                _queue_pool_kwargs(_sync_pool_size, _sync_max_overflow)
+            )
+        else:
+            # Legacy behaviour — open/close per request.
+            _sync_engine_kwargs["poolclass"] = NullPool
     else:
         # Session pooler (:5432) — keep SQLAlchemy pool tiny to respect session limits.
         _sync_engine_kwargs.update(_queue_pool_kwargs(_sync_pool_size, _sync_max_overflow))
 else:
     _sync_engine_kwargs.update(_queue_pool_kwargs(_sync_pool_size, _sync_max_overflow))
+
+# Always skip the psycopg2 hstore OID probe. The app does not use hstore, and
+# that on_connect SELECT is the exact query that dies on Supabase/pgbouncer
+# with "SSL connection has been closed unexpectedly" (Render pre-deploy).
+_sync_engine_kwargs["use_native_hstore"] = False
 
 engine = create_engine(
     _to_sync_url(DATABASE_URL),
@@ -213,12 +276,21 @@ _async_engine_kwargs: dict = {
 
 if _uses_supabase_pooler(DATABASE_URL):
     if _supabase_pooler_port(DATABASE_URL) == 6543:
-        # Transaction pooler — disable SQLAlchemy pooling; unique prepared statement names.
-        _async_engine_kwargs["poolclass"] = NullPool
+        # Transaction pooler — statement caching MUST stay disabled and prepared
+        # statement names MUST stay unique regardless of pool class, or asyncpg
+        # raises DuplicatePreparedStatementError behind pgbouncer.
         _async_engine_kwargs["connect_args"] = _async_connect_args(
             disable_statement_cache=True,
             unique_prepared_names=True,
         )
+        if _transaction_pooler_reuse_enabled():
+            # Reuse a small bounded pool instead of connecting per request.
+            _async_engine_kwargs.update(
+                _queue_pool_kwargs(_async_pool_size, _async_max_overflow)
+            )
+        else:
+            # Legacy behaviour — no SQLAlchemy pooling.
+            _async_engine_kwargs["poolclass"] = NullPool
     else:
         # Session pooler (:5432) — keep SQLAlchemy pool; disable statement caches only.
         _async_engine_kwargs.update(

@@ -87,6 +87,17 @@ def _relax_bot_protection_for_tests(monkeypatch):
     monkeypatch.setattr(bot_protection, "is_blocked_user_agent", lambda _ua: False)
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """Limiter windows are process-wide, so one test can 429 the next one."""
+    from app.core.rate_limiter import limiter
+
+    reset = getattr(limiter._storage, "reset", None)
+    if callable(reset):
+        reset()
+    yield
+
+
 @pytest.fixture
 def client():
     return TestClient(app)

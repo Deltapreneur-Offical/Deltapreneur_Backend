@@ -122,11 +122,18 @@ class AIDomainChecker:
             return AIDomainAvailability(domain=fqdn, available=False, status="unknown")
 
         if check.status == "available":
+            unit = float(check.unitPrice) if check.unitPrice is not None else None
+            if unit is not None and unit <= 0:
+                unit = None
+            total = float(check.totalInr) if check.totalInr is not None else None
+            if total is not None and total <= 0:
+                total = None
             return AIDomainAvailability(
                 domain=fqdn,
                 available=True,
                 status="available",
-                price_inr=float(check.unitPrice or check.price or 0) or None,
+                price_inr=unit,
+                total_inr=total,
             )
         if check.status == "taken":
             return AIDomainAvailability(
@@ -162,6 +169,9 @@ class AIDomainChecker:
                 )
                 continue
             if check.status == "available":
-                unit = float(check.unitPrice or check.price or 0)
-                if unit > 0:
+                unit = float(check.unitPrice) if check.unitPrice is not None else None
+                if unit is not None and unit > 0:
                     results[ext].price_inr = unit
+                total = float(check.totalInr) if check.totalInr is not None else None
+                if total is not None and total > 0:
+                    results[ext].total_inr = total

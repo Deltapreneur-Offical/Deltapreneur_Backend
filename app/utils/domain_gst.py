@@ -47,6 +47,11 @@ def domain_price_breakdown(
     }
 
 
+def gst_inclusive_total_inr(unit_base_inr: float) -> float:
+    """GST-inclusive 1-year payable for an already-marked-up ex-GST unit."""
+    return float(domain_price_breakdown(unit_base_inr, years=1)["totalInr"])
+
+
 def order_gst_payload(order: Any) -> dict[str, Any]:
     """Serialize GST fields from a DomainRegistrationOrder row."""
     subtotal = getattr(order, "subtotal_inr", None)

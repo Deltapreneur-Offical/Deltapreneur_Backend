@@ -145,7 +145,7 @@ class CocreationService:
         from app.utils.pagination import offset_limit
 
         if featured_only:
-            items = list(await self._repo.list_homepage_featured())
+            items = list(await self._repo.list_homepage_featured(limit=page_size))
             return len(items), items
 
         if page_size is None:

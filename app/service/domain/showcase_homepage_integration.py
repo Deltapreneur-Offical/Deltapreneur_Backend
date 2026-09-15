@@ -29,6 +29,7 @@ from typing import Any, Sequence
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.service.domain.showcase_domain_service import ShowcaseDomainService
+from app.service.domain.domain_registration_service import _renewal_customer_pricing
 
 
 def _normalize_name(value: Any) -> str:
@@ -119,6 +120,7 @@ class ShowcaseHomepageIntegration:
             "extension": extension,
             "priceInr": row.create_price_inr,
             "renewalPriceInr": row.renewal_price_inr,
+            "renewalTotalInr": _renewal_customer_pricing(row.renewal_price_inr, tld)[1],
             "payableInr": row.payable_inr,
             "isPremium": bool(row.is_premium),
             # marketplace-compat shape — extension intentionally EMPTY so the

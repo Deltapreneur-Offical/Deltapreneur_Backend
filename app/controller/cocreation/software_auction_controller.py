@@ -10,6 +10,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_async_db
+from app.core.public_list_cache import public_list_cache_get, public_list_cache_put
 from app.core.dependencies import get_current_user, require_role
 from app.entity.auction.auction_participation_entity import AuctionParticipationType
 from app.entity.user.app_user import AppUser
@@ -109,7 +110,12 @@ async def list_active(
     service: SoftwareAuctionService = Depends(get_service),
 ):
     """Public listing for Live Auctions page (approved + ACTIVE/EXTENDED only)."""
-    return await service.list_active()
+    cached = public_list_cache_get("auctions:software:active")
+    if cached is not None:
+        return cached
+    items = await service.list_active()
+    public_list_cache_put("auctions:software:active", items, ttl=15)
+    return items
 
 
 @router.get("/my")

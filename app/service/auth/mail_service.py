@@ -102,6 +102,7 @@ class MailService:
             MAIL_FROM_NAME=settings.MAIL_FROM_NAME,
             USE_CREDENTIALS=True,
             VALIDATE_CERTS=settings.MAIL_VALIDATE_CERTS,
+            TIMEOUT=settings.MAIL_TIMEOUT_SECONDS,
         )
 
     @staticmethod
@@ -119,6 +120,7 @@ class MailService:
             MAIL_FROM_NAME=settings.MAIL_FROM_NAME,
             USE_CREDENTIALS=True,
             VALIDATE_CERTS=True,
+            TIMEOUT=settings.MAIL_TIMEOUT_SECONDS,
         )
 
     @staticmethod

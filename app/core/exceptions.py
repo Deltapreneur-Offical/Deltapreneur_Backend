@@ -74,6 +74,53 @@ def _database_unavailable_response() -> JSONResponse:
     )
 
 
+def build_unhandled_exception_response(
+    request: Request,
+    exc: BaseException,
+) -> JSONResponse:
+    """Render the JSON body returned for any exception no handler claimed."""
+    request_id = getattr(request.state, "request_id", None)
+    user = getattr(request.state, "user", None)
+    user_id = getattr(user, "id", "anonymous") if user else "anonymous"
+
+    if _is_db_connection_error(exc):
+        logger.error(
+            "Database connection error request_id=%s user_id=%s path=%s exc_type=%s: %s",
+            request_id,
+            user_id,
+            request.url.path,
+            type(exc).__name__,
+            exc,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+        return _database_unavailable_response()
+
+    logger.error(
+        "Unhandled exception request_id=%s user_id=%s path=%s exc_type=%s: %s",
+        request_id,
+        user_id,
+        request.url.path,
+        type(exc).__name__,
+        exc,
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+
+    detail = "Unexpected Server Error"
+    if settings.ENVIRONMENT != "production":
+        detail = f"{type(exc).__name__}: {str(exc)}"
+
+    return JSONResponse(
+        status_code=500,
+        content={
+            "success": False,
+            "message": detail,
+            "error": detail,
+            "detail": detail,
+            "data": None,
+        },
+    )
+
+
 class AppException(Exception):
 
     def __init__(
@@ -248,43 +295,4 @@ def register_exception_handlers(
         request: Request,
         exc: Exception
     ):
-        request_id = getattr(request.state, "request_id", None)
-        user = getattr(request.state, "user", None)
-        user_id = getattr(user, "id", "anonymous") if user else "anonymous"
-
-        if _is_db_connection_error(exc):
-            logger.error(
-                "Database connection error request_id=%s user_id=%s path=%s exc_type=%s: %s",
-                request_id,
-                user_id,
-                request.url.path,
-                type(exc).__name__,
-                exc,
-                exc_info=True,
-            )
-            return _database_unavailable_response()
-
-        logger.error(
-            "Unhandled exception request_id=%s user_id=%s path=%s exc_type=%s: %s",
-            request_id,
-            user_id,
-            request.url.path,
-            type(exc).__name__,
-            exc,
-            exc_info=True,
-        )
-
-        detail = "Unexpected Server Error"
-        if settings.ENVIRONMENT != "production":
-            detail = f"{type(exc).__name__}: {str(exc)}"
-
-        return JSONResponse(
-            status_code=500,
-            content={
-                "success": False,
-                "message": detail,
-                "error": detail,
-                "detail": detail,
-                "data": None
-            }
-        )
+        return build_unhandled_exception_response(request, exc)

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.public_list_cache import public_list_cache_get, public_list_cache_put
 from app.core.dependencies import get_current_user, require_role
 from app.entity.user.app_user import AppUser
 from app.model.common.api_response import ApiResponse
@@ -13,6 +14,7 @@ from app.model.common.payment_request import RazorpayVerifyRequest
 from app.model.community.community_auction_bid_request import CommunityAuctionBidRequest
 from app.model.community.community_auction_create_request import CommunityAuctionCreateRequest
 from app.model.community.community_auction_reauction_request import CommunityAuctionReauctionRequest
+from app.repository.community_auction_repository import CommunityAuctionRepository
 from app.repository.community_repository import CommunityRepository
 from app.service.community.community_service import CommunityService
 from app.service.community.community_auction_service import CommunityAuctionService
@@ -112,24 +114,22 @@ def get_by_community_singular(community_id: uuid.UUID, db: Session = Depends(get
 
 @router.get("/active")
 def active_singular(db: Session = Depends(get_db)):
-    auctions = CommunityAuctionService.get_active_auctions(db)
+    cached = public_list_cache_get("auctions:community:active-singular")
+    if cached is not None:
+        return cached
+    auctions = CommunityAuctionRepository.find_active(db)
     # Frontend AuctionsPage expects a raw array (`Array.isArray(data)`).
-    # Also enrich each row with community details used by CreatorAuctionCard.
+    # Community is already joined — do not N+1 fetch each profile.
     enriched: list[dict] = []
     for auction in auctions:
-        item = dict(auction)
-        community_id = item.get("communityId") or item.get("community_id")
-        if community_id:
+        item = CommunityAuctionService._to_response(auction)
+        if auction.community is not None:
             try:
-                community = CommunityRepository.find_by_id(
-                    db=db, community_id=uuid.UUID(str(community_id)),
-                )
-                if community is not None:
-                    item["community"] = CommunityService._to_response(community)
+                item["community"] = CommunityService._to_response(auction.community)
             except Exception:
                 pass
         enriched.append(item)
-    enriched.sort(key=lambda a: a.get("endTime") or a.get("end_time") or "")
+    public_list_cache_put("auctions:community:active-singular", enriched, ttl=15)
     return enriched
 
 

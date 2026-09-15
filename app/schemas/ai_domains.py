@@ -46,6 +46,7 @@ class AIDomainAvailability(BaseModel):
     available: bool = False
     status: Literal["available", "taken", "checking", "unknown"] = "unknown"
     price_inr: float | None = None
+    total_inr: float | None = None
 
 
 class AIDomainResult(BaseModel):
@@ -57,7 +58,9 @@ class AIDomainResult(BaseModel):
     in_available: bool = False
     in_status: Literal["available", "taken", "checking", "unknown"] = "unknown"
     com_price_inr: float | None = None
+    com_total_inr: float | None = None
     in_price_inr: float | None = None
+    in_total_inr: float | None = None
     score: int = Field(ge=0, le=100)
     brand_category: str
     style: str = "Modern Startup"

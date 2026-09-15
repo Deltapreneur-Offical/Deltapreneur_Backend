@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.bot_protection import enforce_bot_protection
 from app.core.database import get_db
+from app.core.public_list_cache import public_list_cache_get, public_list_cache_put
 from app.core.dependencies import get_current_user, get_optional_current_user
 from app.core.rate_limiter import limiter
 from app.entity.user.app_user import AppUser
@@ -206,6 +207,12 @@ def list_published_profiles(
     page_size: int = Query(12, ge=1, le=50),
     db: Session = Depends(get_db),
 ):
+    homepage_cache_key = None
+    if featured_only and not any([search, role, skills, languages, availability, min_price, max_price, experience]):
+        homepage_cache_key = f"va:featured:{page}:{page_size}:{sort_by or 'recently_published'}"
+        cached = public_list_cache_get(homepage_cache_key)
+        if cached is not None:
+            return cached
     result = VirtualAssistantAdminService.list_public_profiles(
         db,
         search=search,
@@ -227,7 +234,7 @@ def list_published_profiles(
         LikeType.VIRTUAL_ASSISTANT.value,
         result["items"],
     )
-    return {
+    payload = {
         "status": "success",
         "data": result["items"],
         "meta": {
@@ -237,6 +244,9 @@ def list_published_profiles(
             "total_pages": result["total_pages"],
         },
     }
+    if homepage_cache_key:
+        public_list_cache_put(homepage_cache_key, payload)
+    return payload
 
 
 @router.get("/{application_id}/public")

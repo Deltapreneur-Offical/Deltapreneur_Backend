@@ -18,6 +18,11 @@ class DomainListingView(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Ba
         Index("idx_domain_listing_views_listing_id", "domain_listing_id"),
         Index("idx_domain_listing_views_viewer_id", "viewer_id"),
         Index("idx_domain_listing_views_viewed_at", "viewed_at"),
+        Index(
+            "ix_domain_listing_views_listing_viewer",
+            "domain_listing_id",
+            "viewer_id",
+        ),
     )
 
     domain_listing_id: Mapped[uuid.UUID] = mapped_column(

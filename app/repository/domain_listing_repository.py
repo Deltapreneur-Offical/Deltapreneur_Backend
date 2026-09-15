@@ -89,6 +89,18 @@ class DomainListingRepository:
         result = await self._session.execute(stmt)
         return result.scalars().all()
 
+    async def get_by_ids_card(self, listing_ids: list[uuid.UUID]) -> Sequence[DomainListing]:
+        """Card/list payload only — skip contact, agreement, and extra users."""
+        if not listing_ids:
+            return []
+        stmt = (
+            select(DomainListing)
+            .where(DomainListing.id.in_(listing_ids), _alive_listing())
+            .options(selectinload(DomainListing.listed_by))
+        )
+        result = await self._session.execute(stmt)
+        return result.scalars().all()
+
     def _active_marketplace_filters(self):
         # UNDER_REVIEW stays publicly visible (premium acquisition in progress).
         return (

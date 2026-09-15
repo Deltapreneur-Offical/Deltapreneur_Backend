@@ -23,7 +23,25 @@ def test_domain_summary_from_listing_includes_resolved_logo():
     assert payload["fullDomain"] == "chrisbadwa.com"
     assert payload["logo"] is not None
     assert "chrisbadwa.png" in payload["logo"]
+    assert payload["views"] == 0
     assert "description" not in payload
+
+
+def test_domain_summary_from_listing_includes_views():
+    listing = SimpleNamespace(
+        id="11111111-1111-4111-8111-111111111111",
+        domain_name="example",
+        domain_extension=".com",
+        pricing_demand=None,
+        logo=None,
+        verified=False,
+        views=42,
+        listed_by=None,
+    )
+
+    payload = domain_summary_from_listing(listing)
+
+    assert payload["views"] == 42
 
 
 def test_domain_summary_from_listing_does_not_map_pricing_to_description():

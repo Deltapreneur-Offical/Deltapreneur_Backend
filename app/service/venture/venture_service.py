@@ -318,6 +318,7 @@ class VentureService:
             items = list(
                 await self._repo.list_homepage_featured(
                     listing_mode=listing_mode,
+                    limit=page_size,
                 )
             )
             return len(items), items

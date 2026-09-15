@@ -20,6 +20,7 @@ from app.core.database import (
     Base,
     DATABASE_URL as NORMALIZED_DATABASE_URL,
     _normalize_supabase_pooler_url,
+    _sync_connect_args,
 )
 
 # User module
@@ -193,6 +194,14 @@ def run_migrations_online() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        # Skip the psycopg2 hstore OID probe. On Supabase/pgbouncer that extra
+        # on_connect query is what surfaces as
+        # "SSL connection has been closed unexpectedly" and fails
+        # `alembic upgrade head` on Render.
+        use_native_hstore=False,
+        # Same host-aware TLS rules as the app engine: require SSL for
+        # Supabase/Render, never for GitHub Actions localhost Postgres.
+        connect_args=_sync_connect_args(),
     )
 
     with connectable.connect() as connection:

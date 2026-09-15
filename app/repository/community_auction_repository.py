@@ -21,6 +21,24 @@ class CommunityAuctionRepository:
         return CommunityAuctionRepository._not_deleted_filter(query).all()
 
     @staticmethod
+    def find_active(db: Session, *, limit: int | None = None) -> list[CommunityAuction]:
+        """Live auctions only — used by public homepage/list cards."""
+        query = (
+            db.query(CommunityAuction)
+            .options(
+                joinedload(CommunityAuction.community).joinedload(Community.app_user),
+            )
+            .filter(
+                CommunityAuction.status.in_(("ACTIVE", "EXTENDED")),
+            )
+            .order_by(CommunityAuction.end_time.asc())
+        )
+        query = CommunityAuctionRepository._not_deleted_filter(query)
+        if limit is not None:
+            query = query.limit(max(1, int(limit)))
+        return query.all()
+
+    @staticmethod
     def find_all_with_details(db: Session) -> list[CommunityAuction]:
         query = (
             db.query(CommunityAuction)

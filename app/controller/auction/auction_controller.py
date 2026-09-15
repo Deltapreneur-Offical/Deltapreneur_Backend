@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_async_db
+from app.core.public_list_cache import public_list_cache_get, public_list_cache_put
 from app.core.dependencies import get_current_user, require_role
 from app.entity.auction.auction_entity import Auction
 from app.entity.user.app_user import AppUser
@@ -133,14 +134,20 @@ async def list_active_auctions(
     page_size: int = Query(50, ge=1, le=200),
     service: AuctionService = Depends(get_auction_service),
 ) -> dict:
+    cache_key = f"auctions:domain:active:{page}:{page_size}"
+    cached = public_list_cache_get(cache_key)
+    if cached is not None:
+        return cached
     items = await service.list_active_enriched(page=page, page_size=page_size)
     total = await service.count_active_auctions()
-    return {
+    payload = {
         "total": total,
         "page": page,
         "page_size": page_size,
         "items": items,
     }
+    public_list_cache_put(cache_key, payload, ttl=15)
+    return payload
 
 
 @router.get("/my")

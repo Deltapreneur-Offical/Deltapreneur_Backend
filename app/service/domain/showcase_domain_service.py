@@ -31,6 +31,7 @@ from app.entity.domain.openprovider_showcase_entity import OpenProviderShowcaseD
 from app.repository.showcase_domain_repository import ShowcaseDomainRepository
 from app.service.domain.showcase_config_service import ShowcaseConfigService
 from app.utils.domain_gst import domain_price_breakdown
+from app.service.domain.domain_registration_service import _renewal_customer_pricing
 
 logger = logging.getLogger(__name__)
 
@@ -538,6 +539,9 @@ class ShowcaseDomainService:
             "source": source,
             "createPriceInr": price,
             "renewalPriceInr": renewal,
+            "renewalTotalInr": (
+                _renewal_customer_pricing(renewal, tld)[1] if renewal else None
+            ),
             "payableInr": payable,
             "registryTier": (item or {}).get("registryTier"),
             "lastCheckedAt": datetime.now(timezone.utc).isoformat(),
@@ -1148,6 +1152,7 @@ class ShowcaseDomainService:
             "askingPrice": row.create_price_inr,
             "priceInr": row.create_price_inr,
             "renewalPriceInr": row.renewal_price_inr,
+            "renewalTotalInr": _renewal_customer_pricing(row.renewal_price_inr, row.tld)[1],
             "payableInr": row.payable_inr,
             "managedAcquisition": bool(
                 row.payable_inr and row.payable_inr > 500_000.0

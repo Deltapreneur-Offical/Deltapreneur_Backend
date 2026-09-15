@@ -5,6 +5,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db, get_async_db
+from app.core.public_list_cache import public_list_cache_get, public_list_cache_put
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import get_current_user, require_role
 from app.entity.auction.auction_participation_entity import (
@@ -140,7 +141,15 @@ def get_my_community_auction_bids(
 def get_active_community_auctions(
     db: Session = Depends(get_db),
 ):
+    cached = public_list_cache_get("auctions:community:active")
+    if cached is not None:
+        return ApiResponse(
+            success=True,
+            message="Active community auctions fetched successfully",
+            data=cached,
+        )
     auctions = CommunityAuctionService.get_active_auctions(db)
+    public_list_cache_put("auctions:community:active", auctions, ttl=15)
     return ApiResponse(
         success=True,
         message="Active community auctions fetched successfully",
