@@ -1628,15 +1628,26 @@ def technology_service_access_email_template(
         if purchase_date
         else ""
     )
-    rows = "".join(
-        f"""
-                    <p style="margin:0 0 10px;">
-                        <strong>{_esc(field.get("label"))}:</strong>
-                        <span style="font-family:Consolas,Menlo,ui-monospace,monospace;word-break:break-word;">{_esc(field.get("value"))}</span>
-                    </p>
+    grouped_fields: dict[str, list[dict[str, str]]] = {}
+    for field in access_fields:
+        section = field.get("section") or "Product access"
+        grouped_fields.setdefault(section, []).append(field)
+
+    rows = ""
+    for section, fields in grouped_fields.items():
+        section_rows = "".join(
+            f"""
+                        <p style="margin:0 0 10px;">
+                            <strong>{_esc(field.get("label"))}:</strong>
+                            <span style="font-family:Consolas,Menlo,ui-monospace,monospace;word-break:break-word;">{_esc(field.get("value"))}</span>
+                        </p>
+            """
+            for field in fields
+        )
+        rows += f"""
+                    <h3 style="margin:0 0 12px;color:#065f46;font-size:16px;">{_esc(section)}</h3>
+                    {section_rows}
         """
-        for field in access_fields
-    )
     button = (
         f"""
                 <p><strong>Login URL:</strong> <a href="{_esc(access_url)}">{_esc(access_url)}</a></p>

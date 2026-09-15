@@ -25,16 +25,19 @@ from app.service.cart.cart_service import CartService
 from app.service.currency.exchange_rate_service import convert_inr, SUPPORTED_CURRENCIES as FX_SUPPORTED
 from app.service.resellportal.product_mapper import (
     build_order_parameters,
-    get_product_key,
     is_provider_mapped,
+    resolve_product_key,
     validate_order_input,
 )
 from app.service.technology.provider_access import (
     access_email_payload,
     confirmation_email_kwargs,
     extract_provider_credentials,
+    load_provider_credentials,
+    merge_provider_credentials,
+    merge_subscription_credentials,
     real_provider_service_id,
-    store_subscription_credentials,
+    stored_provider_client_id,
 )
 from app.utils.addon_services import (
     create_addon_operations_requests,
@@ -242,6 +245,16 @@ def _tech_fulfillment_from_result(
     # subscription: status ACTIVE AND a provider subscription id exists.
     if sub_status == "ACTIVE" and result.get("providerSubscriptionId"):
         return FulfillmentStatus.PROVISIONED, OverallStatus.SUCCESS, None, None
+    if sub_status == "TEST_SIMULATED":
+        return (
+            FulfillmentStatus.IN_PROGRESS,
+            OverallStatus.PENDING,
+            None,
+            str(
+                result.get("message")
+                or "ResellPortal test-mode order was simulated and is not customer-accessible."
+            ),
+        )
     if sub_status in ("PENDING", "PAYMENT_CAPTURED", "PROVISIONING", "PROVISIONING_PENDING"):
         err = result.get("error") or result.get("message")
         return (
@@ -301,6 +314,23 @@ def _tech_sub_periods(billing_cycle: str) -> tuple[datetime, datetime]:
 def _technology_idempotency_key(razorpay_payment_id: str, service_slug: str) -> str:
     """One captured Razorpay payment + service must map to one subscription."""
     return f"rp:{razorpay_payment_id}:{service_slug}"[:64]
+
+
+def _technology_provider_metadata(
+    metadata: dict[str, Any] | None,
+    *,
+    plan_code: str | None = None,
+) -> dict[str, Any]:
+    """Return customer/provider input metadata safe to persist for retries."""
+    cleaned = {
+        str(key): value
+        for key, value in (metadata or {}).items()
+        if not str(key).startswith("_")
+    }
+    if plan_code:
+        cleaned.setdefault("selectedPlan", plan_code)
+        cleaned.setdefault("planCode", plan_code)
+    return cleaned
 
 
 def _technology_paid_totals(item: CartItem, *, fallback_price: float = 0.0) -> tuple[float, float, float]:
@@ -364,6 +394,68 @@ async def _find_paid_technology_subscription(
     return None
 
 
+async def _find_stored_resellportal_portal_account(
+    session: AsyncSession,
+    *,
+    user_id: str,
+) -> dict[str, Any] | None:
+    """Find this user's previously persisted ResellPortal portal account."""
+    from sqlalchemy import select as sa_select
+
+    from app.entity.technology_services.technology_subscription_entity import (
+        TechnologySubscriptionEntity,
+    )
+
+    stmt = (
+        sa_select(TechnologySubscriptionEntity)
+        .where(
+            TechnologySubscriptionEntity.user_id == user_id,
+            TechnologySubscriptionEntity.credentials_json.is_not(None),
+            TechnologySubscriptionEntity.is_deleted.is_(False),
+        )
+        .order_by(TechnologySubscriptionEntity.created_at.asc())
+    )
+    try:
+        res = await session.execute(stmt)
+    except Exception:
+        logger.warning("cart.checkout.technology.portal_account_lookup_failed user=%s", user_id)
+        return None
+    for row in res.scalars().all():
+        creds = load_provider_credentials(row.credentials_json)
+        if stored_provider_client_id(creds):
+            return creds
+    return None
+
+
+async def _ensure_resellportal_portal_account(
+    session: AsyncSession,
+    *,
+    sub: Any,
+    client: Any,
+    user_email: str,
+    user_id: str,
+) -> tuple[str | int | None, dict[str, Any], str | None]:
+    """Create or reuse the customer's portal client and persist it encrypted."""
+    current = load_provider_credentials(getattr(sub, "credentials_json", None))
+    client_id = stored_provider_client_id(current)
+    if client_id:
+        return client_id, current, None
+
+    existing = await _find_stored_resellportal_portal_account(session, user_id=user_id)
+    if existing:
+        merged = merge_subscription_credentials(sub, existing)
+        await session.flush()
+        return stored_provider_client_id(merged), merged, None
+
+    created = client.create_portal_client(user_email=user_email, user_id=user_id)
+    if created.get("success") is not True or not stored_provider_client_id(created):
+        return None, current, str(created.get("error") or "Provider client creation failed.")
+
+    merged = merge_subscription_credentials(sub, created)
+    await session.flush()
+    return stored_provider_client_id(merged), merged, None
+
+
 async def _ensure_paid_technology_service_subscription(
     session: AsyncSession,
     *,
@@ -397,6 +489,7 @@ async def _ensure_paid_technology_service_subscription(
         or "Technology Service"
     ).strip()
     plan_code = str(item.selected_plan or meta.get("planCode") or "starter").strip() or "starter"
+    provider_metadata = _technology_provider_metadata(meta, plan_code=plan_code)
     billing_cycle = "annually" if str(meta.get("billingCycle") or "").lower().startswith("ann") else "monthly"
     subtotal, _gst, paid_from_meta = _technology_paid_totals(item, fallback_price=0.0)
     base_price = float(
@@ -440,10 +533,11 @@ async def _ensure_paid_technology_service_subscription(
             razorpay_payment_id=razorpay_payment_id,
             current_period_start=start,
             current_period_end=end,
-            auto_renew=True,
+            auto_renew=False,
             email_sent=False,
             confirmation_sent=False,
             needs_review=False,
+            provision_input=json.dumps(provider_metadata) if provider_metadata else None,
         )
         session.add(sub)
         try:
@@ -478,6 +572,8 @@ async def _ensure_paid_technology_service_subscription(
         )
         sub.razorpay_order_id = sub.razorpay_order_id or razorpay_order_id
         sub.razorpay_payment_id = sub.razorpay_payment_id or razorpay_payment_id
+        if not sub.provision_input and provider_metadata:
+            sub.provision_input = json.dumps(provider_metadata)
         if not sub.current_period_start or not sub.current_period_end:
             sub.current_period_start, sub.current_period_end = start, end
         await session.flush()
@@ -1387,6 +1483,167 @@ class CartCheckoutService:
             "needsAttention": fail_count > 0,
         }
 
+    async def complete_technology_payment_from_webhook(
+        self,
+        *,
+        razorpay_order_id: str,
+        razorpay_payment_id: str | None,
+        buyer_id: str,
+    ) -> dict[str, Any]:
+        """Fulfill Technology cart lines after Razorpay ``payment.captured``.
+
+        Domain registration rows are handled by ``DomainRegistrationOpsService``.
+        This method exists for the browser-closed case: payment is captured,
+        the cart checkout metadata is still present, and Technology Services
+        must be provisioned without waiting for ``/cart/checkout/verify``.
+        """
+        from sqlalchemy import select as sa_select
+
+        from app.service.platform.track_record_service import (
+            FulfillmentStatus,
+            OverallStatus,
+            PaymentStatus,
+            TrackRecordCategory,
+            TrackRecordService,
+        )
+
+        if not razorpay_order_id or not razorpay_payment_id or not buyer_id:
+            return {"processed": False, "reason": "missing identifiers", "itemsFound": 0}
+
+        try:
+            buyer_uuid = uuid.UUID(str(buyer_id))
+        except (TypeError, ValueError):
+            return {"processed": False, "reason": "invalid buyer", "itemsFound": 0}
+
+        buyer_result = await self._session.execute(sa_select(AppUser).where(AppUser.id == buyer_uuid))
+        buyer = buyer_result.scalar_one_or_none()
+        if buyer is None:
+            return {"processed": False, "reason": "buyer not found", "itemsFound": 0}
+
+        try:
+            items = await self._repo.get_by_user_for_update(buyer.id)
+        except PendingRollbackError:
+            await _reset_aborted_session(self._session)
+            items = await self._repo.get_by_user_for_update(buyer.id)
+
+        checkout_items = [
+            it for it in items
+            if it.product_type == CartProductType.TECHNOLOGY
+            and (it.metadata_json or {}).get("_checkout_razorpay_order_id") == razorpay_order_id
+        ]
+        if not checkout_items:
+            return {"processed": False, "itemsFound": 0, "results": []}
+
+        track_service = TrackRecordService(self._session)
+        results: list[dict[str, Any]] = []
+        processed_item_ids: list[uuid.UUID] = []
+
+        for item in checkout_items:
+            meta = item.metadata_json or {}
+            if meta.get("_fulfilled_razorpay_payment_id"):
+                processed_item_ids.append(item.id)
+                results.append({"itemId": str(item.id), "alreadyProcessed": True, "success": True})
+                continue
+
+            item_name = _cart_item_product_name(item)
+            buyer_details = _checkout_buyer_details(item, buyer)
+            track_financials = _checkout_financials_for_track(item)
+            is_tech_service = bool(str(meta.get("serviceSlug") or "").strip())
+            tr_category = (
+                TrackRecordCategory.TECHNOLOGY_SERVICES
+                if is_tech_service
+                else TrackRecordCategory.TECHNOLOGY_PURCHASE
+            )
+            internal_order_id = _track_internal_order_id(
+                razorpay_order_id=razorpay_order_id,
+                item=item,
+            )
+
+            try:
+                result = await self._process_item_post_payment(
+                    item,
+                    buyer,
+                    razorpay_payment_id,
+                )
+                meta["_fulfilled_razorpay_payment_id"] = razorpay_payment_id
+                item.metadata_json = meta
+                await self._repo.save(item)
+                processed_item_ids.append(item.id)
+                result_success = result.get("success") is not False
+                results.append({"itemId": str(item.id), "success": result_success, **result})
+                is_tech_service = bool(
+                    result.get("isService") or result.get("subscriptionId")
+                ) or is_tech_service
+                if is_tech_service:
+                    tr_category = TrackRecordCategory.TECHNOLOGY_SERVICES
+                fulfillment_status, overall_status, error_code, error_message = _tech_fulfillment_from_result(
+                    result,
+                    is_tech_service,
+                )
+                error_source = "RESELLPORTAL_OR_BACKEND" if error_code else None
+            except Exception as exc:
+                logger.exception(
+                    "cart.checkout.webhook.technology_failed item=%s order=%s",
+                    item.id,
+                    razorpay_order_id,
+                )
+                await _reset_aborted_session(self._session)
+                durable = await _ensure_paid_technology_service_subscription(
+                    self._session,
+                    item=item,
+                    buyer=buyer,
+                    razorpay_order_id=razorpay_order_id,
+                    razorpay_payment_id=razorpay_payment_id,
+                    buyer_details=buyer_details,
+                    track_financials=track_financials,
+                    provisioning_error=exc,
+                )
+                processed_item_ids.append(item.id)
+                results.append({"itemId": str(item.id), "success": False, "error": str(exc), **durable})
+                fulfillment_status = FulfillmentStatus.IN_PROGRESS
+                overall_status = OverallStatus.PENDING
+                error_code = "SERVICE_PROVISIONING_FAILED"
+                error_message = str(exc)
+                error_source = "RESELLPORTAL_OR_BACKEND"
+
+            await track_service.record_paid_attempt(
+                internal_order_id=internal_order_id,
+                cart_batch_id=razorpay_order_id,
+                category=tr_category,
+                provider_subcategory="Razorpay",
+                item_name=item_name,
+                item_id=str(item.product_id),
+                quantity_years=int(meta.get("years") or meta.get("period") or 1),
+                buyer_name=buyer_details["name"],
+                buyer_email=buyer_details["email"],
+                buyer_phone=buyer_details["phone"],
+                buyer_user_id=buyer.id,
+                **track_financials,
+                currency="INR",
+                payment_status=PaymentStatus.CAPTURED,
+                razorpay_order_id=razorpay_order_id,
+                razorpay_payment_id=razorpay_payment_id,
+                fulfillment_status=fulfillment_status,
+                overall_status=overall_status,
+                error_code=error_code,
+                error_message=error_message,
+                error_source=error_source,
+            )
+
+        deleted_count = 0
+        if processed_item_ids:
+            deleted_count = await self._repo.delete_items_by_ids(processed_item_ids, buyer.id)
+        await self._session.commit()
+        fail_count = sum(1 for row in results if row.get("success") is False)
+        return {
+            "processed": True,
+            "itemsFound": len(checkout_items),
+            "itemsDeleted": deleted_count,
+            "success": fail_count == 0,
+            "needsAttention": fail_count > 0,
+            "results": results,
+        }
+
     async def cancel_checkout_order(
         self,
         buyer: AppUser,
@@ -1515,6 +1772,24 @@ class CartCheckoutService:
                 if tech_service is None or not (
                     getattr(tech_service, "is_available", True) if not isinstance(tech_service, dict) else tech_service.get("is_available", True)
                 ):
+                    return None
+
+                service_slug = (
+                    getattr(tech_service, "slug", None)
+                    if not isinstance(tech_service, dict)
+                    else tech_service.get("slug")
+                )
+                configured_key = (
+                    getattr(tech_service, "provider_product_key", None)
+                    if not isinstance(tech_service, dict)
+                    else tech_service.get("provider_product_key")
+                )
+                if not resolve_product_key(str(service_slug or ""), configured_key):
+                    return None
+                provider_plan = str(item.selected_plan or "starter").strip() or "starter"
+                provider_meta = _technology_provider_metadata(item.metadata_json or {}, plan_code=provider_plan)
+                ok, _missing = validate_order_input(str(service_slug or ""), provider_meta)
+                if not ok:
                     return None
 
                 plans_json = getattr(tech_service, "plans_json", None) if not isinstance(tech_service, dict) else tech_service.get("plans_json")
@@ -2566,18 +2841,23 @@ class CartCheckoutService:
         provider_service_name = product_name
 
         if tech_service is not None and not isinstance(tech_service, dict):
-            provider_product_key = getattr(tech_service, "provider_product_key", None) or get_product_key(
-                getattr(tech_service, "slug", "")
-            )
             provider_service_slug = getattr(tech_service, "slug", None)
+            provider_product_key = resolve_product_key(
+                provider_service_slug or "",
+                getattr(tech_service, "provider_product_key", None),
+            )
         elif tech_service is not None and isinstance(tech_service, dict):
-            provider_product_key = tech_service.get("provider_product_key") or get_product_key(tech_service.get("slug", ""))
             provider_service_slug = tech_service.get("slug")
+            provider_product_key = resolve_product_key(
+                provider_service_slug or "",
+                tech_service.get("provider_product_key"),
+            )
 
         if not provider_service_slug:
             raise AppException("Technology service slug could not be resolved during checkout.")
 
         provider_plan_code = str(item.selected_plan or "starter").strip() or "starter"
+        provider_metadata = _technology_provider_metadata(item.metadata_json or {}, plan_code=provider_plan_code)
         billing_cycle = "monthly"
         bc_meta = (item.metadata_json or {}).get("billingCycle", "").lower()
         if bc_meta.startswith("ann"):
@@ -2630,10 +2910,11 @@ class CartCheckoutService:
             razorpay_payment_id=razorpay_payment_id,
             current_period_start=start,
             current_period_end=end,
-            auto_renew=True,
+            auto_renew=False,
             email_sent=False,
             confirmation_sent=False,
             needs_review=False,
+            provision_input=json.dumps(provider_metadata) if provider_metadata else None,
         )
         self._session.add(sub)
         try:
@@ -2696,7 +2977,7 @@ class CartCheckoutService:
             # Business Phone needs areaCode/phoneNumber; Web Hosting needs a
             # primary domain. If missing, do NOT call POST /orders — put the
             # paid purchase into a needs-input state instead.
-            ok, missing = validate_order_input(provider_service_slug, item.metadata_json or {})
+            ok, missing = validate_order_input(provider_service_slug, provider_metadata)
             if not ok:
                 sub.status = "PENDING"
                 sub.needs_review = True
@@ -2731,6 +3012,19 @@ class CartCheckoutService:
                         logger.exception("cart.checkout.technology.needs_input_email.failed purchase=%s", item.product_id)
             else:
                 client = get_resellportal_client()
+                portal_client_id, portal_account, portal_error = await _ensure_resellportal_portal_account(
+                    self._session,
+                    sub=sub,
+                    client=client,
+                    user_email=buyer_email,
+                    user_id=str(buyer.id),
+                )
+                if portal_error:
+                    sub.last_provider_status = "PROVISIONING_PENDING"
+                    sub.last_provider_error = portal_error
+                    await self._session.flush()
+                else:
+                    await self._session.commit()
 
                 # ── 3) Reconcile existing provider orders FIRST ──
                 # POST /orders has NO idempotency, so before creating a new
@@ -2761,7 +3055,7 @@ class CartCheckoutService:
                     )
                     adopted_creds = extract_provider_credentials(reconciliation)
                     if adopted_creds:
-                        store_subscription_credentials(sub, adopted_creds)
+                        merge_subscription_credentials(sub, merge_provider_credentials(portal_account, adopted_creds))
                     sub.last_provider_status = str(reconciliation.get("status") or "PENDING").upper()
                     if (
                         str(reconciliation.get("status") or "").upper() == "ACTIVE"
@@ -2846,7 +3140,7 @@ class CartCheckoutService:
                         product_key=provider_product_key,
                         plan_code=provider_plan_code,
                         billing_cycle=billing_cycle,
-                        metadata=item.metadata_json or {},
+                        metadata=provider_metadata,
                     )
                     sub.status = "PROVISIONING"
                     sub.last_provision_attempt_at = datetime.now(timezone.utc)
@@ -2865,6 +3159,8 @@ class CartCheckoutService:
                             user_id=str(buyer.id),
                             product_key=provider_product_key,
                             order_parameters=order_parameters,
+                            provider_client_id=portal_client_id,
+                            portal_account=portal_account,
                         )
                     except Exception as exc:
                         logger.exception(
@@ -2890,7 +3186,7 @@ class CartCheckoutService:
                             prov_res.get("provider_subscription_id")
                             or real_provider_service_id(prov_res, user_id=str(buyer.id))
                         )
-                        store_subscription_credentials(sub, prov_res.get("credentials") or {})
+                        merge_subscription_credentials(sub, prov_res.get("credentials") or portal_account or {})
                         start, end = prov_res.get("current_period_start"), prov_res.get("current_period_end")
                         if start is None or end is None:
                             start, end = _tech_sub_periods(billing_cycle)
@@ -2940,12 +3236,51 @@ class CartCheckoutService:
                                     sub.access_email_status = "FAILED"
                                     await self._session.flush()
                                     logger.exception("cart.checkout.technology.access_email.failed purchase=%s", item.product_id)
+                    elif provider_success and provider_status == "TEST_SIMULATED":
+                        sub.status = "TEST_SIMULATED"
+                        sub.provider_order_id = prov_res.get("provider_order_id")
+                        sub.provider_subscription_id = prov_res.get("provider_subscription_id")
+                        if prov_res.get("credentials"):
+                            merge_subscription_credentials(sub, prov_res.get("credentials"))
+                        sub.next_retry_at = None
+                        sub.needs_review = False
+                        sub.last_provider_error = (
+                            prov_res.get("message")
+                            or "ResellPortal test-mode order was simulated and is not customer-accessible."
+                        )
+                        await self._session.flush()
+                        result_status = "TEST_SIMULATED"
+                        result_success = True
+                        subscriber_id = str(sub.id)
+                        if not sub.email_sent:
+                            try:
+                                await MailService.send_technology_purchase_pending_email(
+                                    to_email=buyer_email,
+                                    customer_name=buyer_name,
+                                    service_name=provider_service_name or provider_service_slug,
+                                    plan_name=plan_name,
+                                    billing_cycle=billing_cycle,
+                                    cobrother_order_id=cobrother_request_id,
+                                    razorpay_payment_id=razorpay_payment_id,
+                                    amount_inr=float(paid_total),
+                                    purchase_date=purchase_date,
+                                    reason=(
+                                        "This was processed in ResellPortal test mode. "
+                                        "The provider simulated the order, so no customer-accessible service "
+                                        "was created in the portal."
+                                    ),
+                                    purchases_url=purchases_url,
+                                )
+                                sub.email_sent = True
+                                await self._session.flush()
+                            except Exception:
+                                logger.exception("cart.checkout.technology.simulated_email.failed purchase=%s", item.product_id)
                     elif provider_success and provider_status in ("PENDING", "PROVISIONING_PENDING"):
                         sub.status = "PENDING"
                         sub.provider_order_id = prov_res.get("provider_order_id")
                         sub.provider_subscription_id = prov_res.get("provider_subscription_id")
                         if prov_res.get("credentials"):
-                            store_subscription_credentials(sub, prov_res.get("credentials"))
+                            merge_subscription_credentials(sub, prov_res.get("credentials"))
                         sub.next_retry_at = datetime.now(timezone.utc) + _tech_backoff_for(sub.provision_attempts)
                         await self._session.flush()
                         result_status = "PENDING"
@@ -3008,7 +3343,7 @@ class CartCheckoutService:
                             except Exception:
                                 logger.exception("cart.checkout.technology.pending_email.failed purchase=%s", item.product_id)
         else:
-            # ── Manual fulfillment path (e.g. WordPress Plugin Pack) ──
+            # ── Manual fulfillment path (unmapped catalogue slug only) ──
             # No provider mapping / product key: NEVER call POST /orders and
             # never fake a provider ID. Admin fulfills via the admin endpoint
             # and the subscription transitions PENDING → ACTIVE.

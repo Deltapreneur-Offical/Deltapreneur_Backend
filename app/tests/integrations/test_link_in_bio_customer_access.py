@@ -131,7 +131,7 @@ def test_confirmed_provision_response_maps_real_service_id():
     assert mapped["provider_subscription_id"] == SERVICE_ID
     assert mapped["provider_order_id"] is None
     assert mapped["credentials"]["username"] == "kushi"
-    assert mapped["credentials"]["access_token"] == SECRET_TOKEN
+    assert "access_token" not in mapped["credentials"]
     assert not is_fabricated_provider_id(mapped["provider_subscription_id"], OWNER_ID)
 
 

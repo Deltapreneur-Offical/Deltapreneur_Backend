@@ -18,6 +18,7 @@ from app.integrations.razorpay import client as rzp
 from app.repository.domain_registration_order_repository import (
     DomainRegistrationOrderRepository,
 )
+from app.service.cart.cart_checkout_service import CartCheckoutService
 from app.service.domain.domain_registration_service import DomainRegistrationService
 from app.utils.registration_enums import RegistrationOrderStatus
 
@@ -82,10 +83,30 @@ class DomainRegistrationOpsService:
             outcome = await self._registration.complete_payment_from_webhook(
                 order_id, payment_id,
             )
+            cart_outcome: dict = {"processed": False, "itemsFound": 0}
+            order_notes = entity.get("notes") if isinstance(entity.get("notes"), dict) else {}
+            if not order_notes:
+                try:
+                    fetched_order = rzp.fetch_order(order_id)
+                    order_notes = fetched_order.get("notes") or {}
+                except Exception:
+                    logger.info("razorpay.webhook.cart_notes_unavailable order_id=%s", order_id)
+                    order_notes = {}
+            if str(order_notes.get("cartCheckout") or "").lower() == "true":
+                buyer_id = str(order_notes.get("buyerId") or order_notes.get("buyer_id") or "").strip()
+                cart_outcome = await CartCheckoutService(self._session).complete_technology_payment_from_webhook(
+                    razorpay_order_id=order_id,
+                    razorpay_payment_id=payment_id,
+                    buyer_id=buyer_id,
+                )
             orders_found = int(outcome.get("ordersFound") or 0)
             registration_attempted = bool(outcome.get("registrationAttempted"))
             registration_successful = bool(outcome.get("registrationSuccessful"))
-            needs_attention = bool(outcome.get("needsAttention")) or orders_found == 0
+            needs_attention = (
+                bool(outcome.get("needsAttention"))
+                or bool(cart_outcome.get("needsAttention"))
+                or (orders_found == 0 and int(cart_outcome.get("itemsFound") or 0) == 0)
+            )
 
             if orders_found == 0:
                 logger.warning(
@@ -117,6 +138,7 @@ class DomainRegistrationOpsService:
                 "registrationAttempted": registration_attempted,
                 "registrationSuccessful": registration_successful,
                 "ordersFound": orders_found,
+                "technologyWebhook": cart_outcome,
                 "needsAttention": needs_attention,
                 "skipReason": outcome.get("skipReason"),
                 "results": outcome.get("results") or [],

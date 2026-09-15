@@ -38,6 +38,21 @@ def test_supabase_session_pooler_urls_are_normalized_to_transaction_mode(monkeyp
     )
 
 
+def test_supabase_pooler_normalization_preserves_encoded_credentials(monkeypatch) -> None:
+    import app.core.database as db
+
+    monkeypatch.setattr(db.settings, "ENVIRONMENT", "production")
+    raw = (
+        "postgresql://postgres.project:pa%40ss%231"
+        "@aws-0-ap-northeast-2.pooler.supabase.com:5432/postgres"
+    )
+
+    assert db._normalize_supabase_pooler_url(raw) == (
+        "postgresql://postgres.project:pa%40ss%231"
+        "@aws-0-ap-northeast-2.pooler.supabase.com:6543/postgres"
+    )
+
+
 def test_supabase_transaction_pooler_urls_are_left_unchanged(monkeypatch) -> None:
     import app.core.database as db
 

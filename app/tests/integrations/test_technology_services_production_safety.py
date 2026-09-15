@@ -6,7 +6,7 @@ Covers the scenarios required by the production-safe remediation design:
   B. Business Phone without area code  -> no POST /orders, PENDING/needs-input
   C. Web Hosting with valid domain     -> cpanel_username + primary_domain -> ACTIVE
   D. Web Hosting missing domain        -> no POST /orders, PENDING/needs-input
-  E. WordPress (unmapped)              -> no POST /orders, manual fulfillment
+  E. WordPress missing plugin metadata -> no POST /orders, PENDING/needs-input
   F. Provider ACTIVE                   -> ACTIVE + confirmation email + PROVISIONED/SUCCESS
   G. Provider PENDING                  -> PENDING + pending email + retry scheduled
   H. Provider failure                  -> PROVISIONING_PENDING + IN_PROGRESS/PENDING + pending email
@@ -22,17 +22,21 @@ Covers the scenarios required by the production-safe remediation design:
 from __future__ import annotations
 
 import json
+import uuid
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.core.exceptions import AppException
 from app.entity.technology_services.technology_service_entity import TechnologyServiceEntity
+from app.service.cart.cart_service import CartService
 from app.service.cart.cart_checkout_service import (
     CartCheckoutService,
     _checkout_financials_for_track,
     _ensure_paid_technology_service_subscription,
+    _ensure_resellportal_portal_account,
     _tech_backoff_for,
     _tech_fulfillment_from_result,
     _tech_sub_periods,
@@ -40,6 +44,7 @@ from app.service.cart.cart_checkout_service import (
     _technology_paid_totals,
 )
 from app.service.platform.track_record_service import FulfillmentStatus, OverallStatus
+from app.service.technology.provider_access import dump_provider_credentials, load_provider_credentials
 from app.utils.cart_enums import CartProductType
 
 
@@ -76,6 +81,66 @@ def _make_cart_item(service_id, slug: str, selected_plan: str = "starter", **met
     meta.update(meta_extra)
     item.metadata_json = meta
     return item
+
+
+@pytest.mark.asyncio
+async def test_cart_blocks_provider_service_when_required_mapping_input_is_missing(monkeypatch):
+    service = CartService(session=MagicMock())
+    service_id = uuid.uuid4()
+    tech_service = _make_tech_service("ai-business-suite", provider_product_key="ai_business_tools")
+    tech_service.id = service_id
+    tech_service.is_available = True
+
+    async def no_software(_product_id):
+        return None
+
+    async def get_service(_product_id):
+        return tech_service
+
+    monkeypatch.setattr(service, "_get_software", no_software)
+    monkeypatch.setattr(service, "_get_technology_service", get_service)
+
+    with pytest.raises(AppException) as exc_info:
+        await service._validate_product_available(
+            CartProductType.TECHNOLOGY,
+            service_id,
+            uuid.uuid4(),
+            {},
+            selected_plan="pro",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "aiTools" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_cart_blocks_email_marketing_enterprise_plan_before_razorpay(monkeypatch):
+    service = CartService(session=MagicMock())
+    service_id = uuid.uuid4()
+    tech_service = _make_tech_service("email-marketing", provider_product_key="email_marketing")
+    tech_service.id = service_id
+    tech_service.is_available = True
+
+    async def no_software(_product_id):
+        return None
+
+    async def get_service(_product_id):
+        return tech_service
+
+    monkeypatch.setattr(service, "_get_software", no_software)
+    monkeypatch.setattr(service, "_get_technology_service", get_service)
+
+    with pytest.raises(AppException) as exc_info:
+        await service._validate_product_available(
+            CartProductType.TECHNOLOGY,
+            service_id,
+            uuid.uuid4(),
+            {},
+            selected_plan="enterprise",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "sendingPlan" in str(exc_info.value)
 
 
 def _make_buyer():
@@ -187,7 +252,7 @@ async def test_a_business_phone_with_area_code_provisions_and_activates():
         mock_cobrother_repo.create = AsyncMock()
         MockCobrother.return_value = mock_cobrother_repo
 
-        mock_client = MagicMock()
+        mock_client = _mock_resellportal_client()
         mock_client.reconcile_pending_provisioning.return_value = {"reconciled": False, "provider_order_id": None}
         mock_client.provision_service.return_value = {
             "success": True,
@@ -237,6 +302,74 @@ async def test_a_business_phone_with_area_code_provisions_and_activates():
         assert commit_calls, "subscription must be committed before provider provisioning"
 
 
+@pytest.mark.asyncio
+async def test_test_mode_simulation_is_not_presented_as_active_or_emailed_access():
+    svc = _make_tech_service("business-phone", provider_product_key="business_phone")
+    item = _make_cart_item(svc.id, "business-phone", areaCode="415")
+    buyer = _make_buyer()
+
+    with _checkout_context(svc, item) as (MockCart, MockRepo, mock_get_client, MockPurchase, MockCobrother, MockMail, MockAddon):
+        mock_cart_svc = MockCart.return_value
+        mock_cart_svc._get_technology_service = AsyncMock(return_value=svc)
+        mock_cart_svc._get_technology_service_fallback = AsyncMock(return_value=None)
+        mock_purchase_repo = MagicMock()
+        mock_purchase_repo.get_by_razorpay_payment_id = AsyncMock(return_value=None)
+        MockPurchase.return_value = mock_purchase_repo
+        mock_cobrother_repo = MagicMock()
+        mock_cobrother_repo.create = AsyncMock()
+        MockCobrother.return_value = mock_cobrother_repo
+        MockMail.send_technology_purchase_pending_email = AsyncMock()
+
+        mock_client = _mock_resellportal_client()
+        mock_client.reconcile_pending_provisioning.return_value = {"reconciled": False, "provider_order_id": None}
+        mock_client.provision_service.return_value = {
+            "success": True,
+            "status": "TEST_SIMULATED",
+            "provider_order_id": "ORD-TEST",
+            "provider_subscription_id": "test_svc_1",
+            "credentials": {
+                "test_mode": True,
+                "test_only": True,
+                "simulated": True,
+            },
+            "message": "ResellPortal test-mode order was simulated.",
+            "test_mode": True,
+            "test_only": True,
+            "simulated": True,
+        }
+        mock_get_client.return_value = mock_client
+
+        added = []
+
+        def fake_add(obj):
+            added.append(obj)
+            if not getattr(obj, "id", None):
+                obj.id = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+
+        mock_session = MagicMock()
+        mock_session.add = MagicMock(side_effect=fake_add)
+        mock_session.flush = AsyncMock()
+        mock_session.commit = AsyncMock()
+        mock_session.execute = AsyncMock(return_value=MagicMock(
+            scalar_one_or_none=MagicMock(return_value=None),
+            scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))),
+        ))
+
+        service = CartCheckoutService(mock_session)
+        result = await service._complete_technology_purchase(
+            item=item, buyer=buyer, razorpay_payment_id="pay_test",
+            buyer_name="Test Buyer", buyer_email="buyer@cobrother.com", buyer_phone="+919999999999",
+        )
+
+        assert result["status"] == "TEST_SIMULATED"
+        assert result["success"] is True
+        assert result["providerSubscriptionId"] == "test_svc_1"
+        mock_client.provision_service.assert_called_once()
+        MockMail.send_technology_service_access_email.assert_not_called()
+        MockMail.send_technology_purchase_confirmation_email.assert_not_called()
+        MockMail.send_technology_purchase_pending_email.assert_called_once()
+
+
 # --------------------------------------------------------------------------- #
 # B. Business Phone without area code -> NO POST /orders, PENDING/needs-input
 # --------------------------------------------------------------------------- #
@@ -257,6 +390,7 @@ async def test_b_business_phone_without_area_code_never_calls_provider():
         mock_cobrother_repo = MagicMock()
         mock_cobrother_repo.create = AsyncMock()
         MockCobrother.return_value = mock_cobrother_repo
+        MockMail.send_technology_purchase_pending_email = AsyncMock()
 
         mock_session = MagicMock()
         added = []
@@ -317,7 +451,7 @@ async def test_c_web_hosting_with_domain_provisions_with_cpanel_and_domain():
         mock_cobrother_repo.create = AsyncMock()
         MockCobrother.return_value = mock_cobrother_repo
 
-        mock_client = MagicMock()
+        mock_client = _mock_resellportal_client()
         mock_client.reconcile_pending_provisioning.return_value = {"reconciled": False, "provider_order_id": None}
         mock_client.provision_service.return_value = {
             "success": True, "status": "ACTIVE",
@@ -401,12 +535,12 @@ async def test_d_web_hosting_missing_domain_never_calls_provider():
 
 
 # --------------------------------------------------------------------------- #
-# E. WordPress (unmapped) -> NO POST /orders, PENDING manual fulfillment
+# E. WordPress missing required plugin metadata -> NO POST /orders, needs-input
 # --------------------------------------------------------------------------- #
 
 @pytest.mark.asyncio
-async def test_e_wordpress_unmapped_never_calls_provider_and_marks_manual():
-    svc = _make_tech_service("wordpress-plugin-pack", provider_product_key=None)
+async def test_e_wordpress_missing_plugin_metadata_never_calls_provider():
+    svc = _make_tech_service("wordpress-plugin-pack", provider_product_key="wp_plugin_installer")
     item = _make_cart_item(svc.id, "wordpress-plugin-pack")
     buyer = _make_buyer()
 
@@ -448,7 +582,7 @@ async def test_e_wordpress_unmapped_never_calls_provider_and_marks_manual():
         assert result["success"] is False
         sub = next((o for o in added if type(o).__name__ == "TechnologySubscriptionEntity"), None)
         assert sub is not None
-        assert sub.last_provider_status == "MANUAL_FULFILLMENT_REQUIRED"
+        assert sub.last_provider_status == "NEEDS_INPUT"
         assert sub.needs_review is True
         MockMail.send_technology_purchase_pending_email.assert_called_once()
         MockMail.send_technology_purchase_confirmation_email.assert_not_called()
@@ -531,6 +665,78 @@ def _retry_service_context():
     return _Ctx()
 
 
+def _mock_resellportal_client() -> MagicMock:
+    mock_client = MagicMock()
+    mock_client.create_portal_client.return_value = {
+        "success": True,
+        "provider_client_id": "CLI-TEST",
+        "account_portal_url": "https://deltaosportal.deltapreneur.com/account",
+        "portal_email": "buyer@cobrother.com",
+        "portal_password": "portal-test-password",
+    }
+    return mock_client
+
+
+@pytest.mark.asyncio
+async def test_portal_account_reuses_current_subscription_credentials():
+    sub = _FakeSubscription()
+    sub.credentials_json = dump_provider_credentials(
+        {
+            "provider_client_id": "CLI-EXISTING",
+            "account_portal_url": "https://deltaosportal.deltapreneur.com/account",
+            "portal_email": "buyer@cobrother.com",
+            "portal_password": "stored-portal-password",
+        }
+    )
+    session = MagicMock()
+    session.flush = AsyncMock()
+    client = _mock_resellportal_client()
+
+    client_id, portal_account, error = await _ensure_resellportal_portal_account(
+        session,
+        sub=sub,
+        client=client,
+        user_email="buyer@cobrother.com",
+        user_id=sub.user_id,
+    )
+
+    assert error is None
+    assert client_id == "CLI-EXISTING"
+    assert portal_account["portal_password"] == "stored-portal-password"
+    client.create_portal_client.assert_not_called()
+    session.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_portal_account_creation_is_persisted_before_order_call():
+    sub = _FakeSubscription()
+    sub.credentials_json = None
+    session = MagicMock()
+    session.flush = AsyncMock()
+    session.execute = AsyncMock(side_effect=RuntimeError("no prior account"))
+    client = _mock_resellportal_client()
+
+    client_id, portal_account, error = await _ensure_resellportal_portal_account(
+        session,
+        sub=sub,
+        client=client,
+        user_email="buyer@cobrother.com",
+        user_id=sub.user_id,
+    )
+
+    stored = load_provider_credentials(sub.credentials_json)
+    assert error is None
+    assert client_id == "CLI-TEST"
+    assert portal_account["portal_password"] == "portal-test-password"
+    assert stored["provider_client_id"] == "CLI-TEST"
+    assert stored["portal_password"] == "portal-test-password"
+    client.create_portal_client.assert_called_once_with(
+        user_email="buyer@cobrother.com",
+        user_id=sub.user_id,
+    )
+    session.flush.assert_awaited()
+
+
 @pytest.mark.asyncio
 async def test_j_retry_reconciles_first_and_adopts_existing_order():
     from app.service.technology.technology_subscription_retry_service import (
@@ -540,7 +746,7 @@ async def test_j_retry_reconciles_first_and_adopts_existing_order():
     sub = _FakeSubscription(status="PENDING", provision_attempts=0)
 
     with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
-        mock_client = MagicMock()
+        mock_client = _mock_resellportal_client()
         # An existing matching provider order is found -> MUST be adopted.
         mock_client.find_matching_order.return_value = {
             "provider_order_id": "ORD-EXISTING",
@@ -582,7 +788,7 @@ async def test_j_retry_no_existing_order_then_provisions_once():
     )
 
     with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
-        mock_client = MagicMock()
+        mock_client = _mock_resellportal_client()
         mock_client.find_matching_order.return_value = None
         mock_client.provision_service.return_value = {
             "success": True, "status": "ACTIVE",
@@ -635,7 +841,7 @@ async def test_j_active_subscription_without_confirmation_sends_email_only():
     mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=_User())))
 
     with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
-        mock_client = MagicMock()
+        mock_client = _mock_resellportal_client()
         mock_get_client.return_value = mock_client
         MockMail.send_technology_purchase_confirmation_email = AsyncMock()
 
@@ -676,7 +882,7 @@ async def test_j_active_subscription_confirmation_email_failure_stays_retryable(
     mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=_User())))
 
     with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
-        mock_client = MagicMock()
+        mock_client = _mock_resellportal_client()
         mock_get_client.return_value = mock_client
         MockMail.send_technology_purchase_confirmation_email = AsyncMock(
             side_effect=RuntimeError("SMTP 535 authentication failed")
@@ -738,7 +944,7 @@ async def test_k_run_tick_uses_row_locking_and_never_charges():
     mock_session.execute = AsyncMock(side_effect=fake_execute)
 
     with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
-        mock_client = MagicMock()
+        mock_client = _mock_resellportal_client()
         mock_client.find_matching_order.return_value = None
         mock_client.provision_service.return_value = {
             "success": True, "status": "ACTIVE",
@@ -877,7 +1083,7 @@ async def test_n_retry_sends_confirmation_once_and_sets_flags():
     )
 
     with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
-        mock_client = MagicMock()
+        mock_client = _mock_resellportal_client()
         mock_client.find_matching_order.return_value = None
         mock_client.provision_service.return_value = {
             "success": True, "status": "ACTIVE",
@@ -925,7 +1131,7 @@ async def test_active_crm_retry_sends_access_email_with_stored_credentials():
     )
 
     with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
-        mock_client = MagicMock()
+        mock_client = _mock_resellportal_client()
         mock_client.find_matching_order.return_value = None
         mock_client.provision_service.return_value = {
             "success": True,
@@ -1070,7 +1276,7 @@ async def test_n_pending_email_sent_once_for_needs_input():
     )
 
     with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
-        mock_client = MagicMock()
+        mock_client = _mock_resellportal_client()
         mock_client.find_matching_order.return_value = None
         mock_get_client.return_value = mock_client
         MockTrackRepo.return_value = MagicMock(
@@ -1271,6 +1477,7 @@ async def test_h_provider_failure_keeps_paid_purchase_pending():
     svc = _make_tech_service("cloud-storage", provider_product_key="cloud_storage")
     item = _make_cart_item(svc.id, "cloud-storage")
     item.metadata_json.update({
+        "storagePlan": "200gb",
         "_checkout_unit_price_inr": 4667.0,
         "_checkout_subtotal_inr": 4667.0,
         "_checkout_gst_inr": 840.06,
@@ -1289,7 +1496,7 @@ async def test_h_provider_failure_keeps_paid_purchase_pending():
         MockCobrother.return_value = MagicMock(create=AsyncMock())
         MockMail.send_technology_purchase_pending_email = AsyncMock()
 
-        mock_client = MagicMock()
+        mock_client = _mock_resellportal_client()
         mock_client.reconcile_pending_provisioning.return_value = {"reconciled": False, "provider_order_id": None}
         mock_client.provision_service.return_value = {
             "success": False,
@@ -1329,6 +1536,7 @@ async def test_h_provider_failure_keeps_paid_purchase_pending():
 async def test_i_provider_exception_after_commit_keeps_paid_purchase():
     svc = _make_tech_service("cloud-storage", provider_product_key="cloud_storage")
     item = _make_cart_item(svc.id, "cloud-storage")
+    item.metadata_json["storagePlan"] = "200gb"
     buyer = _make_buyer()
     added: list = []
 
@@ -1340,7 +1548,7 @@ async def test_i_provider_exception_after_commit_keeps_paid_purchase():
         MockCobrother.return_value = MagicMock(create=AsyncMock())
         MockMail.send_technology_purchase_pending_email = AsyncMock()
 
-        mock_client = MagicMock()
+        mock_client = _mock_resellportal_client()
         mock_client.reconcile_pending_provisioning.return_value = {"reconciled": False}
         mock_client.provision_service.side_effect = RuntimeError("provider timeout")
         mock_get_client.return_value = mock_client
@@ -1465,7 +1673,7 @@ async def test_retry_provider_failure_keeps_purchase_pending():
     )
 
     with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
-        mock_client = MagicMock()
+        mock_client = _mock_resellportal_client()
         mock_client.find_matching_order.return_value = None
         mock_client.provision_service.return_value = {
             "success": False, "status": "FAILED", "error": "still down",
@@ -1506,7 +1714,7 @@ async def test_email_failure_does_not_drop_paid_purchase():
         MockCobrother.return_value = MagicMock(create=AsyncMock())
         MockMail.send_technology_purchase_pending_email = AsyncMock(side_effect=RuntimeError("SMTP blip"))
 
-        mock_client = MagicMock()
+        mock_client = _mock_resellportal_client()
         mock_client.reconcile_pending_provisioning.return_value = {"reconciled": False}
         mock_client.provision_service.return_value = {"success": False, "status": "FAILED", "error": "nope"}
         mock_get_client.return_value = mock_client
@@ -1566,7 +1774,7 @@ async def test_retry_provider_failure_keeps_captured_and_retryable():
     )
 
     with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
-        mock_client = MagicMock()
+        mock_client = _mock_resellportal_client()
         mock_client.find_matching_order.return_value = None
         mock_client.provision_service.return_value = {
             "success": False,
@@ -1614,7 +1822,7 @@ async def test_retry_timeout_then_reconcile_adopts_without_duplicate_post():
     )
 
     with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
-        mock_client = MagicMock()
+        mock_client = _mock_resellportal_client()
         mock_client.find_matching_order.side_effect = [
             None,
             {
@@ -1671,7 +1879,7 @@ async def test_activation_email_failure_does_not_rollback_active():
     )
 
     with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
-        mock_client = MagicMock()
+        mock_client = _mock_resellportal_client()
         mock_client.find_matching_order.return_value = None
         mock_client.provision_service.return_value = {
             "success": True,
@@ -1721,7 +1929,7 @@ async def test_retry_subscription_refuses_unpaid_and_never_posts():
     )
 
     with _retry_service_context() as (mock_get_client, MockMail, MockTrackSvc, MockTrackRepo):
-        mock_client = MagicMock()
+        mock_client = _mock_resellportal_client()
         mock_get_client.return_value = mock_client
         svc = TechnologySubscriptionRetryService(mock_session)
         result = await svc.retry_subscription(sub.id, force=True)
@@ -1729,5 +1937,68 @@ async def test_retry_subscription_refuses_unpaid_and_never_posts():
         assert "not paid" in (result.get("error") or "")
         mock_client.find_matching_order.assert_not_called()
         mock_client.provision_service.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_razorpay_webhook_invokes_technology_cart_fulfillment():
+    from app.service.domain.domain_registration_ops_service import DomainRegistrationOpsService
+
+    payload = {
+        "event": "payment.captured",
+        "payload": {
+            "payment": {
+                "entity": {
+                    "id": "pay_webhook",
+                    "order_id": "order_webhook",
+                }
+            }
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    session = MagicMock()
+
+    async def fake_domain_webhook(self, order_id, payment_id):
+        return {
+            "ordersFound": 0,
+            "registrationAttempted": False,
+            "registrationSuccessful": False,
+            "results": [],
+        }
+
+    async def fake_tech_webhook(self, *, razorpay_order_id, razorpay_payment_id, buyer_id):
+        assert razorpay_order_id == "order_webhook"
+        assert razorpay_payment_id == "pay_webhook"
+        assert buyer_id == "33333333-3333-3333-3333-333333333333"
+        return {"processed": True, "itemsFound": 1, "success": True, "needsAttention": False}
+
+    with (
+        patch("app.service.domain.domain_registration_ops_service.rzp._webhook_secret", return_value="whsec"),
+        patch("app.service.domain.domain_registration_ops_service.rzp.verify_webhook_signature", return_value=True),
+        patch(
+            "app.service.domain.domain_registration_ops_service.rzp.fetch_order",
+            return_value={
+                "id": "order_webhook",
+                "notes": {
+                    "cartCheckout": "true",
+                    "buyerId": "33333333-3333-3333-3333-333333333333",
+                },
+            },
+        ),
+        patch(
+            "app.service.domain.domain_registration_service.DomainRegistrationService.complete_payment_from_webhook",
+            new=fake_domain_webhook,
+        ),
+        patch(
+            "app.service.cart.cart_checkout_service.CartCheckoutService.complete_technology_payment_from_webhook",
+            new=fake_tech_webhook,
+        ),
+    ):
+        result = await DomainRegistrationOpsService(session).handle_razorpay_webhook(body, "sig")
+
+    assert result["processed"] is True
+    assert result["paymentAccepted"] is True
+    assert result["technologyWebhook"]["processed"] is True
+    assert result["technologyWebhook"]["itemsFound"] == 1
+    assert result["needsAttention"] is False
 
 

@@ -34,6 +34,20 @@ def test_captured_active_provisioning_is_active():
     assert view["provisioningStatus"] == "ACTIVE"
 
 
+def test_test_mode_simulation_is_not_customer_active():
+    sub = _FakeSubscription(
+        status="TEST_SIMULATED",
+        provider_order_id="ORD-TEST",
+        provider_subscription_id="test_svc_123",
+    )
+    view = customer_activation_view(sub, max_retries=5)
+    assert view["paymentStatus"] == "COMPLETED"
+    assert view["activationStatus"] == "TEST_SIMULATED"
+    assert view["activationStatusLabel"] == "Test Mode Simulation"
+    assert view["completionStatus"] == "PENDING"
+    assert view["provisioningStatus"] == "TEST_SIMULATED"
+
+
 def test_payment_failed_preserves_failed_state():
     sub = _FakeSubscription(status="PENDING")
     sub.payment_status = "FAILED"
