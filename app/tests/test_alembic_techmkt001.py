@@ -1,0 +1,50 @@
+"""Alembic graph tests for the reconstructed techmkt001 revision."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+
+
+def _script() -> ScriptDirectory:
+    root = Path(__file__).resolve().parents[2]
+    cfg = Config(str(root / "alembic.ini"))
+    return ScriptDirectory.from_config(cfg)
+
+
+def test_techmkt001_revision_is_discoverable():
+    script = _script()
+    rev = script.get_revision("techmkt001")
+    assert rev is not None
+    assert rev.revision == "techmkt001"
+    assert rev.down_revision == "perf_listing_indexes_001"
+
+
+def test_single_head_is_techmkt001():
+    script = _script()
+    heads = script.get_heads()
+    assert heads == ["techmkt001"]
+
+
+def test_upgrade_path_includes_marketplace_and_legacy_id():
+    script = _script()
+    revisions = [sc.revision for sc in script.walk_revisions()]
+    assert "techmkt001" in revisions
+    assert "7f3e7e682dc7" in revisions
+    # walk_revisions yields newest-first; legacy id is the head.
+    assert revisions[0] == "techmkt001"
+    assert revisions.index("techmkt001") < revisions.index("7f3e7e682dc7")
+
+
+def test_base_to_head_path_reaches_techmkt001():
+    script = _script()
+    upgrade_order = [
+        sc.revision
+        for sc in script.iterate_revisions("techmkt001", "base")
+    ]
+    # iterate_revisions(upper, lower) yields upper→lower (newest first).
+    assert upgrade_order[0] == "techmkt001"
+    assert "7f3e7e682dc7" in upgrade_order
+    assert "perf_listing_indexes_001" in upgrade_order
