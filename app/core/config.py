@@ -327,10 +327,17 @@ class Settings(BaseSettings):
         """Active Razorpay key id, preferring explicit sandbox/live pairs.
 
         Resolution order:
-        1. RAZORPAY_SANDBOX_KEY_ID (when present)
-        2. RAZORPAY_LIVE_KEY_ID (when present)
-        3. RAZORPAY_KEY_ID (generic fallback)
+        Production:
+        1. RAZORPAY_LIVE_KEY_ID
+        2. RAZORPAY_KEY_ID
+
+        Non-production:
+        1. RAZORPAY_SANDBOX_KEY_ID
+        2. RAZORPAY_LIVE_KEY_ID
+        3. RAZORPAY_KEY_ID
         """
+        if (self.ENVIRONMENT or "").strip().lower() == "production":
+            return self.RAZORPAY_LIVE_KEY_ID.strip() or self.RAZORPAY_KEY_ID.strip()
         return (
             self.RAZORPAY_SANDBOX_KEY_ID.strip()
             or self.RAZORPAY_LIVE_KEY_ID.strip()
@@ -345,9 +352,12 @@ class Settings(BaseSettings):
         """
         sandbox_id = self.RAZORPAY_SANDBOX_KEY_ID.strip()
         live_id = self.RAZORPAY_LIVE_KEY_ID.strip()
-        resolved_id = sandbox_id or live_id or self.RAZORPAY_KEY_ID.strip()
+        if (self.ENVIRONMENT or "").strip().lower() == "production":
+            resolved_id = live_id or self.RAZORPAY_KEY_ID.strip()
+        else:
+            resolved_id = sandbox_id or live_id or self.RAZORPAY_KEY_ID.strip()
 
-        if resolved_id == sandbox_id:
+        if resolved_id == sandbox_id and (self.ENVIRONMENT or "").strip().lower() != "production":
             return self.RAZORPAY_SANDBOX_KEY_SECRET.strip() or self.RAZORPAY_KEY_SECRET.strip()
         if resolved_id == live_id:
             return self.RAZORPAY_LIVE_KEY_SECRET.strip() or self.RAZORPAY_KEY_SECRET.strip()

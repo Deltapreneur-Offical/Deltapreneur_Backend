@@ -34,6 +34,7 @@ from app.service.admin.admin_serializers import (
     serialize_technology_listing,
     serialize_venture_admin,
 )
+from app.service.admin.homepage_feature_limit import enforce_homepage_feature_limit
 
 
 def _fetch_non_deleted_communities(db: Session) -> list[Community]:
@@ -551,7 +552,11 @@ async def toggle_domain_homepage(db: Session, entity_id: str):
     row = db.query(DomainListing).filter(DomainListing.id == UUID(entity_id)).first()
     if not row:
         return {"success": False, "error": "Domain not found"}
-    row.featured = not row.featured
+    next_featured = not row.featured
+    blocked = enforce_homepage_feature_limit(db, "DOMAIN", row, next_featured)
+    if blocked:
+        return blocked
+    row.featured = next_featured
     db.commit()
     public_list_cache_clear()
     return {"success": True, "featured": row.featured}
@@ -561,7 +566,11 @@ async def toggle_venture_homepage(db: Session, entity_id: str):
     row = db.query(Venture).filter(Venture.id == UUID(entity_id)).first()
     if not row:
         return {"success": False, "error": "Venture not found"}
-    row.featured = not row.featured
+    next_featured = not row.featured
+    blocked = enforce_homepage_feature_limit(db, "VENTURE", row, next_featured)
+    if blocked:
+        return blocked
+    row.featured = next_featured
     db.commit()
     public_list_cache_clear("ventures:")
     return {"success": True, "featured": row.featured}
@@ -577,6 +586,9 @@ async def toggle_software_homepage(db: Session, entity_id: str):
             "success": False,
             "error": "Technology must be verified by an admin before it can be featured on the homepage",
         }
+    blocked = enforce_homepage_feature_limit(db, "SOFTWARE", row, next_featured)
+    if blocked:
+        return blocked
     row.featured = next_featured
     db.commit()
     public_list_cache_clear("software:")
@@ -629,6 +641,9 @@ async def set_featured(db: Session, entity_type: str, entity_id: str, featured: 
             "success": False,
             "error": "Technology must be verified by an admin before it can be featured on the homepage",
         }
+    blocked = enforce_homepage_feature_limit(db, et, row, featured)
+    if blocked:
+        return blocked
     row.featured = featured
     db.commit()
     public_list_cache_clear()

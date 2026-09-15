@@ -38,6 +38,21 @@ def test_supabase_session_pooler_urls_are_normalized_to_transaction_mode(monkeyp
     )
 
 
+def test_supabase_pooler_normalization_preserves_encoded_credentials(monkeypatch) -> None:
+    import app.core.database as db
+
+    monkeypatch.setattr(db.settings, "ENVIRONMENT", "production")
+    raw = (
+        "postgresql://postgres.project:pa%40ss%231"
+        "@aws-0-ap-northeast-2.pooler.supabase.com:5432/postgres"
+    )
+
+    assert db._normalize_supabase_pooler_url(raw) == (
+        "postgresql://postgres.project:pa%40ss%231"
+        "@aws-0-ap-northeast-2.pooler.supabase.com:6543/postgres"
+    )
+
+
 def test_supabase_transaction_pooler_urls_are_left_unchanged(monkeypatch) -> None:
     import app.core.database as db
 
@@ -152,6 +167,34 @@ def test_effective_pool_settings_widen_for_transaction_pooler(monkeypatch) -> No
     pool_size, max_overflow = db._effective_pool_settings()
     assert pool_size >= 10
     assert max_overflow >= 10
+
+
+def test_effective_pool_settings_stay_tiny_for_session_pooler(monkeypatch) -> None:
+    import app.core.database as db
+
+    session_url = (
+        "postgresql://user:pass@aws-0-ap-northeast-2.pooler.supabase.com:5432/postgres"
+    )
+    monkeypatch.setattr(db, "DATABASE_URL", session_url)
+    pool_size, max_overflow = db._effective_pool_settings()
+    assert pool_size == 1
+    assert max_overflow == 1
+    assert db._session_pooler_uses_null_pool() is True
+
+
+def test_emaxconnsession_is_treated_as_database_unavailable() -> None:
+    from app.core.exceptions import _is_db_connection_error
+
+    class FakeInternal(Exception):
+        pass
+
+    root = FakeInternal(
+        "(EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15"
+    )
+    wrapped = RuntimeError("db failed")
+    wrapped.__cause__ = root
+    assert _is_db_connection_error(root) is True
+    assert _is_db_connection_error(wrapped) is True
 
 
 def test_transaction_pooler_uses_queue_pool_and_keeps_pgbouncer_args(monkeypatch) -> None:

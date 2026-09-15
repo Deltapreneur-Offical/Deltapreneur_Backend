@@ -24,6 +24,8 @@ from app.integrations.resellportal.mock_resellportal_api import MockResellPortal
 from app.service.technology.provider_access import (
     credential_log_fields,
     extract_provider_credentials,
+    merge_provider_credentials,
+    portal_account_from_provider_client,
     real_provider_order_id,
     real_provider_service_id,
 )
@@ -36,11 +38,64 @@ UNCONFIGURED_ADMIN_MESSAGE = (
 )
 
 
+def _production_environment() -> bool:
+    return str(getattr(settings, "ENVIRONMENT", "") or "").strip().lower() == "production"
+
+
+def _production_live_resellportal_enabled() -> bool:
+    return (
+        not _production_environment()
+        or (
+            bool(getattr(settings, "RESELLPORTAL_ALLOW_LIVE", False))
+            and not bool(getattr(settings, "RESELLPORTAL_TEST_MODE", True))
+        )
+    )
+
+
+def _production_live_disabled_response() -> dict[str, Any]:
+    return {
+        "success": False,
+        "status": "PROVISIONING_PENDING",
+        "provider_order_id": None,
+        "provider_subscription_id": None,
+        "service_id": None,
+        "credentials": {},
+        "error": "Live ResellPortal provisioning is not enabled for production.",
+        "needs_reconciliation": True,
+        "configured": bool(settings.resellportal_configured()),
+    }
+
+
+def _simulated_test_order_response(res: dict[str, Any], *, user_id: str) -> dict[str, Any]:
+    service_id = real_provider_service_id(res, user_id=user_id)
+    order_id = real_provider_order_id(res, user_id=user_id)
+    return {
+        "success": True,
+        "status": "TEST_SIMULATED",
+        "provider_order_id": order_id,
+        "provider_subscription_id": service_id,
+        "service_id": service_id,
+        "current_period_start": None,
+        "current_period_end": None,
+        "credentials": {},
+        "message": (
+            "ResellPortal test_mode order was simulated by the provider; "
+            "no real service is customer-accessible."
+        ),
+        "needs_reconciliation": False,
+        "configured": True,
+        "test_mode": True,
+        "test_only": True,
+        "simulated": True,
+    }
+
+
 def normalize_provision_response(
     res: dict[str, Any],
     *,
     user_id: str,
     billing_cycle: str,
+    request_test_mode: bool = False,
 ) -> dict[str, Any]:
     """Map a live POST /orders body onto local fields without fabricating IDs.
 
@@ -72,6 +127,9 @@ def normalize_provision_response(
             "needs_reconciliation": True,
             "configured": True,
         }
+
+    if request_test_mode or bool(res.get("test_mode")):
+        return _simulated_test_order_response(res, user_id=user_id)
 
     service_id = real_provider_service_id(res, user_id=user_id)
     order_id = real_provider_order_id(res, user_id=user_id)
@@ -161,8 +219,79 @@ class ResellPortalClient:
             "Accept": "application/json",
         }
 
+    def create_portal_client(
+        self,
+        *,
+        user_email: str,
+        user_id: str,
+        portal_password: str | None = None,
+    ) -> dict[str, Any]:
+        """POST /clients and return normalized portal-account fields.
+
+        The confirmed provider contract only documents POST /clients. Reuse
+        must therefore come from our own encrypted, persisted customer state.
+        """
+        if not self.is_configured():
+            if _production_environment():
+                return {
+                    "success": False,
+                    "error": "ResellPortal API credentials are not configured.",
+                    "configured": False,
+                }
+            res = MockResellPortalAPI.create_client(
+                user_email=user_email,
+                user_id=user_id,
+                test_mode=self.is_test_mode(),
+            )
+            normalized = portal_account_from_provider_client(res)
+            normalized.update(
+                {
+                    "success": bool(normalized.get("provider_client_id")),
+                    "configured": False,
+                    "is_mock": True,
+                    "test_mode": self.is_test_mode(),
+                    "test_only": True,
+                }
+            )
+            return normalized
+
+        if not _production_live_resellportal_enabled():
+            return {
+                "success": False,
+                "error": "Live ResellPortal client creation is not enabled for production.",
+                "configured": True,
+            }
+
+        payload = {
+            "name": user_email,
+            "email": user_email,
+        }
+        if portal_password:
+            payload["password"] = portal_password
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                response = client.post(
+                    f"{self.api_base}/clients",
+                    headers=self.get_auth_headers(),
+                    json=payload,
+                )
+                response.raise_for_status()
+                res_json = response.json()
+                normalized = portal_account_from_provider_client(res_json if isinstance(res_json, dict) else {})
+                normalized.update({"success": bool(normalized.get("provider_client_id")), "configured": True})
+                if not normalized["success"]:
+                    normalized["error"] = "ResellPortal did not return a client_id from POST /clients."
+                return normalized
+        except Exception as err:
+            logger.warning("ResellPortal client creation failed for user_id=%s: %s", user_id, type(err).__name__)
+            return {
+                "success": False,
+                "error": type(err).__name__,
+                "configured": True,
+            }
+
     def _create_client(self, user_email: str, user_id: str) -> str | int | None:
-        """Resolve (or create) a ResellPortal client and return the client_id.
+        """Backward-compatible POST /clients wrapper returning the client_id.
 
         Client creation intentionally bypasses *test_mode* payload injection.
         When ``test_mode`` is present in the request body, ResendPortal returns a
@@ -171,52 +300,9 @@ class ResellPortalClient:
         real (numeric) client — then sending ``test_mode`` on the subsequent
         /orders call — gives us a usable ``client_id`` while still exercising
         the test-mode provisioning path on the orders endpoint.
-
-        If a client with the same email already exists, it is reused rather
-        than creating a duplicate.
         """
-        if not self.is_configured():
-            res = MockResellPortalAPI.create_client(user_email=user_email, user_id=user_id, test_mode=self.is_test_mode())
-            return res.get("client_id")
-
-        headers = self.get_auth_headers()
-
-        # 1. Look up an existing client by email to avoid duplicates.
-        try:
-            with httpx.Client(timeout=15.0) as client:
-                resp = client.get(
-                    f"{self.api_base}/clients",
-                    headers=headers,
-                    params={"email": user_email},
-                )
-                if resp.status_code == 200:
-                    clients = resp.json().get("clients") or []
-                    if clients:
-                        existing_id = clients[0].get("id")
-                        if existing_id is not None:
-                            logger.info("ResendPortal reusing existing client_id=%s for email=%s", existing_id, user_email)
-                            return existing_id
-        except Exception as err:
-            logger.warning("ResendPortal client lookup failed for email=%s: %s", user_email, err)
-
-        # 2. Create a new client (no test_mode in body).
-        payload = {
-            "name": user_email,
-            "email": user_email,
-        }
-        try:
-            with httpx.Client(timeout=15.0) as client:
-                response = client.post(
-                    f"{self.api_base}/clients",
-                    headers=headers,
-                    json=payload,
-                )
-                response.raise_for_status()
-                res_json = response.json()
-                return res_json.get("client_id")
-        except Exception as err:
-            logger.warning("ResendPortal client creation failed for user_id=%s: %s", user_id, err)
-            return None
+        res = self.create_portal_client(user_email=user_email, user_id=user_id)
+        return res.get("provider_client_id")
 
     def _make_request(
         self,
@@ -232,11 +318,10 @@ class ResellPortalClient:
         data = dict(json_data) if json_data else {}
 
         # Automatically inject test_mode for POST/DELETE in test mode.
-        # Also include skip_client_email for provider order activation flows where supported.
         if method in ("POST", "DELETE") and self.is_test_mode():
             data["test_mode"] = True
-            if method == "POST":
-                data["skip_client_email"] = True
+        if method == "POST" and endpoint.strip("/").lower() == "orders":
+            data["skip_client_email"] = True
 
         headers = self.get_auth_headers()
 
@@ -284,6 +369,12 @@ class ResellPortalClient:
     def get_wallet_balance(self) -> dict[str, Any]:
         """GET /wallet/balance - Fetch live wallet balance."""
         if not self.is_configured():
+            if _production_environment():
+                return {
+                    "success": False,
+                    "configured": False,
+                    "message": UNCONFIGURED_ADMIN_MESSAGE,
+                }
             logger.info("ResellPortal API unconfigured. Returning mock wallet balance.")
             res = MockResellPortalAPI.get_wallet_balance()
             res["configured"] = False
@@ -292,6 +383,8 @@ class ResellPortalClient:
 
         res = self._make_request("GET", "wallet/balance")
         if not res.get("success") and res.get("fallback"):
+            if _production_environment():
+                return res
             mock_res = MockResellPortalAPI.get_wallet_balance()
             mock_res["configured"] = True
             mock_res["live_error"] = res.get("error")
@@ -301,15 +394,25 @@ class ResellPortalClient:
     def get_product_catalog(self) -> list[dict[str, Any]]:
         """GET /catalog - Fetch product catalog from provider."""
         if not self.is_configured():
+            if _production_environment():
+                return []
             return MockResellPortalAPI.get_catalog()
         res = self._make_request("GET", "catalog")
         if isinstance(res, list):
             return res
+        if _production_environment():
+            return []
         return MockResellPortalAPI.get_catalog()
 
     def get_service_status(self, service_slug: str) -> dict[str, Any]:
         """GET /services/{slug} - Fetch service status."""
         if not self.is_configured():
+            if _production_environment():
+                return {
+                    "success": False,
+                    "configured": False,
+                    "error": "ResellPortal API credentials are not configured.",
+                }
             res = MockResellPortalAPI.get_service_status(service_slug)
             res["configured"] = False
             return res
@@ -439,6 +542,8 @@ class ResellPortalClient:
         user_id: str,
         product_key: str | None = None,
         order_parameters: dict[str, Any] | None = None,
+        provider_client_id: str | int | None = None,
+        portal_account: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Activate a ResellPortal technology service through POST /orders.
 
@@ -458,6 +563,18 @@ class ResellPortalClient:
         )
 
         if not self.is_configured():
+            if _production_environment():
+                return {
+                    "success": False,
+                    "status": "PROVISIONING_PENDING",
+                    "provider_order_id": None,
+                    "provider_subscription_id": None,
+                    "service_id": None,
+                    "credentials": {},
+                    "error": "ResellPortal API credentials are not configured.",
+                    "needs_reconciliation": True,
+                    "configured": False,
+                }
             res = MockResellPortalAPI.provision_service(
                 service_slug=service_slug,
                 service_name=service_name,
@@ -469,8 +586,27 @@ class ResellPortalClient:
                 product_key=product_key,
                 order_parameters=order_parameters,
             )
-            res["configured"] = False
-            return res
+            normalized = normalize_provision_response(
+                res,
+                user_id=user_id,
+                billing_cycle=billing_cycle,
+                request_test_mode=self.is_test_mode(),
+            )
+            normalized["credentials"] = merge_provider_credentials(
+                portal_account,
+                normalized.get("credentials") if isinstance(normalized.get("credentials"), dict) else {},
+            )
+            if normalized.get("simulated") and isinstance(normalized.get("credentials"), dict):
+                normalized["credentials"] = merge_provider_credentials(
+                    normalized["credentials"],
+                    {"test_mode": True, "test_only": True, "simulated": True},
+                )
+            normalized["configured"] = False
+            normalized["test_mode"] = self.is_test_mode()
+            return normalized
+
+        if not _production_live_resellportal_enabled():
+            return _production_live_disabled_response()
 
         payload = {
             "product_key": product_key or service_slug,
@@ -482,10 +618,19 @@ class ResellPortalClient:
             "user_id": user_id,
         }
 
-        # ResendPortal POST /orders requires a client_id.  Create one first.
-        resolved_client_id = self._create_client(user_email, user_id)
-        if resolved_client_id is not None:
-            payload["client_id"] = resolved_client_id
+        if provider_client_id is None:
+            return {
+                "success": False,
+                "status": "PROVISIONING_PENDING",
+                "provider_order_id": None,
+                "provider_subscription_id": None,
+                "service_id": None,
+                "credentials": {},
+                "error": "ResellPortal client_id is required before order provisioning.",
+                "needs_reconciliation": True,
+                "configured": True,
+            }
+        payload["client_id"] = provider_client_id
 
         if order_parameters:
             payload.update(order_parameters)
@@ -495,47 +640,96 @@ class ResellPortalClient:
             payload["ai_tools"] = [payload["ai_tools"]]
 
         res = self._make_request("POST", "orders", json_data=payload)
-        return normalize_provision_response(res, user_id=user_id, billing_cycle=billing_cycle)
+        normalized = normalize_provision_response(
+            res,
+            user_id=user_id,
+            billing_cycle=billing_cycle,
+            request_test_mode=self.is_test_mode(),
+        )
+        if normalized.get("credentials") or portal_account:
+            normalized["credentials"] = merge_provider_credentials(
+                portal_account,
+                normalized.get("credentials") if isinstance(normalized.get("credentials"), dict) else {},
+            )
+        if normalized.get("simulated") and isinstance(normalized.get("credentials"), dict):
+            normalized["credentials"] = merge_provider_credentials(
+                normalized["credentials"],
+                {"test_mode": True, "test_only": True, "simulated": True},
+            )
+        return normalized
 
     def renew_subscription(self, provider_sub_id: str, billing_cycle: str) -> dict[str, Any]:
         """Renew active subscription with provider."""
         logger.info("ResellPortal Renew Request | sub_id=%s cycle=%s configured=%s", provider_sub_id, billing_cycle, self.is_configured())
         if not self.is_configured():
+            if _production_environment():
+                return {
+                    "success": False,
+                    "error": "ResellPortal API credentials are not configured.",
+                    "configured": False,
+                }
             res = MockResellPortalAPI.renew_subscription(provider_sub_id, billing_cycle, test_mode=self.is_test_mode())
             res["configured"] = False
             return res
 
+        if not _production_live_resellportal_enabled():
+            return {
+                "success": False,
+                "error": "Live ResellPortal renewals are not enabled for production.",
+                "configured": True,
+            }
+
         payload = {"billing_cycle": billing_cycle}
         res = self._make_request("POST", f"subscriptions/{provider_sub_id}/renew", json_data=payload)
-        if not res.get("success") or res.get("fallback"):
-            return MockResellPortalAPI.renew_subscription(provider_sub_id, billing_cycle, test_mode=self.is_test_mode())
         return res
 
     def upgrade_subscription(self, provider_sub_id: str, new_plan_code: str) -> dict[str, Any]:
         """Upgrade/downgrade plan with provider."""
         logger.info("ResellPortal Plan Upgrade Request | sub_id=%s new_plan=%s configured=%s", provider_sub_id, new_plan_code, self.is_configured())
         if not self.is_configured():
+            if _production_environment():
+                return {
+                    "success": False,
+                    "error": "ResellPortal API credentials are not configured.",
+                    "configured": False,
+                }
             res = MockResellPortalAPI.upgrade_subscription(provider_sub_id, new_plan_code, test_mode=self.is_test_mode())
             res["configured"] = False
             return res
 
+        if not _production_live_resellportal_enabled():
+            return {
+                "success": False,
+                "error": "Live ResellPortal upgrades are not enabled for production.",
+                "configured": True,
+            }
+
         payload = {"new_plan_code": new_plan_code}
         res = self._make_request("POST", f"subscriptions/{provider_sub_id}/upgrade", json_data=payload)
-        if not res.get("success") or res.get("fallback"):
-            return MockResellPortalAPI.upgrade_subscription(provider_sub_id, new_plan_code, test_mode=self.is_test_mode())
         return res
 
     def cancel_subscription(self, provider_sub_id: str) -> dict[str, Any]:
         """Cancel active subscription with provider."""
         logger.info("ResellPortal Cancellation Request | sub_id=%s configured=%s", provider_sub_id, self.is_configured())
         if not self.is_configured():
+            if _production_environment():
+                return {
+                    "success": False,
+                    "error": "ResellPortal API credentials are not configured.",
+                    "configured": False,
+                }
             res = MockResellPortalAPI.cancel_subscription(provider_sub_id, test_mode=self.is_test_mode())
             res["configured"] = False
             return res
 
+        if not _production_live_resellportal_enabled():
+            return {
+                "success": False,
+                "error": "Live ResellPortal cancellations are not enabled for production.",
+                "configured": True,
+            }
+
         res = self._make_request("DELETE", f"subscriptions/{provider_sub_id}")
-        if not res.get("success") or res.get("fallback"):
-            return MockResellPortalAPI.cancel_subscription(provider_sub_id, test_mode=self.is_test_mode())
         return res
 
     def handle_webhook(self, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:

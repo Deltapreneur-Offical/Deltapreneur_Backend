@@ -29,6 +29,7 @@ from app.service.technology.technology_purchase_status import is_paid_payment
 logger = logging.getLogger(__name__)
 
 CREDENTIALS_ENC_PREFIX = "enc:v1:"
+PROVIDER_CLIENT_ID_KEY = "provider_client_id"
 LINK_IN_BIO_SLUG = "link-in-bio"
 LINK_IN_BIO_MANAGE_PATH = "/link-in-bio/manage"
 SENSITIVE_CREDENTIAL_KEYS = {
@@ -42,6 +43,16 @@ SENSITIVE_CREDENTIAL_KEYS = {
     "refresh_token",
 }
 SECRET_QUERY_KEYS = {"access_token", "token", "api_token", "api_key"}
+# Confirmed Deltapreneur white-label customer portal (not CoBrother / ResellPortal hosts).
+CUSTOMER_STOREFRONT_HOST = "deltaosportal.deltapreneur.com"
+ACCOUNT_PORTAL_URL = f"https://{CUSTOMER_STOREFRONT_HOST}/account"
+BLOCKED_PROVIDER_HOSTS = {
+    "technologies.cobrother.com",
+    "workspace.cobrother.com",
+    "panel.resellportal.com",
+    "resellportal.com",
+    "www.resellportal.com",
+}
 CUSTOMER_EMAIL_BLOCKED_KEYS = {
     "access_token",
     "token",
@@ -59,6 +70,7 @@ CUSTOMER_EMAIL_BLOCKED_KEYS = {
     "provider_order_id",
     "order_id",
     "client_id",
+    PROVIDER_CLIENT_ID_KEY,
     "account_id",
     "instance_id",
     "user_id",
@@ -68,6 +80,7 @@ CUSTOMER_EMAIL_BLOCKED_KEYS = {
     "fallback",
 }
 CUSTOMER_ACCESS_URL_KEYS = {
+    "client_access_url",
     "access_url",
     "url",
     "login_url",
@@ -76,10 +89,17 @@ CUSTOMER_ACCESS_URL_KEYS = {
     "dashboard_url",
     "portal_url",
     "webmail_url",
+    "activation_url",
+    "qr_code_url",
+    "bio_url",
+    "logo_url",
+    "account_portal_url",
     "loginurl",
     "accessurl",
 }
 URL_KEY_PREFERENCE = (
+    "account_portal_url",
+    "client_access_url",
     "login_url",
     "loginurl",
     "access_url",
@@ -88,6 +108,9 @@ URL_KEY_PREFERENCE = (
     "cpanel_url",
     "portal_url",
     "webmail_url",
+    "qr_code_url",
+    "activation_url",
+    "bio_url",
     "url",
     "manage_url",
 )
@@ -99,6 +122,7 @@ PLACEHOLDER_URL_HOSTS = {
     "example.org",
     "www.example.org",
     "example.test",
+    "technologies.cobrother.com",
     "workspace.cobrother.com",
     "localhost",
     "127.0.0.1",
@@ -112,6 +136,7 @@ EMAIL_SKIP_METADATA_KEYS = {
     "fallback",
     "is_mock",
     "test_mode",
+    "test_only",
 }
 PLACEHOLDER_VALUE_KEYS = {
     "package_code",
@@ -192,13 +217,118 @@ def real_provider_order_id(payload: dict[str, Any] | None, *, user_id: Any = Non
 
 def extract_provider_credentials(payload: dict[str, Any] | None) -> dict[str, Any]:
     data = payload or {}
-    creds = data.get("credentials")
-    if isinstance(creds, dict) and creds:
-        return dict(creds)
-    client_creds = data.get("client_credentials")
-    if isinstance(client_creds, dict) and client_creds:
-        return dict(client_creds)
-    return {}
+    out: dict[str, Any] = {}
+
+    def merge(section: Any, *, prefix: str | None = None) -> None:
+        if not isinstance(section, dict):
+            return
+        for raw_key, value in section.items():
+            key = str(raw_key or "").strip()
+            key_lower = key.lower()
+            if not key or key_lower in CUSTOMER_EMAIL_BLOCKED_KEYS:
+                continue
+            if key_lower in SENSITIVE_CREDENTIAL_KEYS and key_lower != "password":
+                continue
+            if isinstance(value, str) and key_lower in CUSTOMER_ACCESS_URL_KEYS:
+                if not is_safe_customer_url(value):
+                    continue
+            target_key = f"{prefix}_{key}" if prefix else key
+            out[target_key] = value
+
+    merge(data.get("credentials"))
+    merge(data.get("client_credentials"), prefix="product")
+    merge(data.get("vpn_credentials"))
+    merge(data.get("portal_credentials"), prefix="portal")
+
+    client_access_url = _nonempty_str(data.get("client_access_url"))
+    if client_access_url and is_safe_customer_url(client_access_url):
+        out["client_access_url"] = client_access_url
+
+    portal_login_url = _nonempty_str(data.get("portal_login_url"))
+    if portal_login_url and is_safe_customer_url(portal_login_url):
+        out["account_portal_url"] = portal_login_url
+    # Do not fabricate account_portal_url when the provider omitted a login URL.
+
+    nested_sections = {
+        "bio": {"slug", "bio_url"},
+        "esim_details": {"qr_code_url", "activation_url", "iccid", "esim_status"},
+        "plugin": {"name", "description", "author", "license_key"},
+        "hosting": {"username", "domain", "password"},
+        "phone": {"phone_number", "country", "status"},
+        "storage": {"plan", "quota", "used", "status"},
+        "email_marketing": {"sending_plan", "status"},
+    }
+    for section_key, allowed in nested_sections.items():
+        section = data.get(section_key)
+        if not isinstance(section, dict):
+            continue
+        for key in allowed:
+            value = section.get(key)
+            if value in (None, "", [], {}):
+                continue
+            if key in CUSTOMER_ACCESS_URL_KEYS and not is_safe_customer_url(value):
+                continue
+            out[key] = value
+
+    return out
+
+
+def portal_account_from_provider_client(payload: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize the confirmed POST /clients response into encrypted storage fields.
+
+    Only values actually returned by ResellPortal are included. The portal
+    password is returned once by the provider, so callers should persist this
+    encrypted blob before attempting POST /orders.
+    """
+    data = payload or {}
+    out: dict[str, Any] = {}
+    client_id = _nonempty_str(data.get(PROVIDER_CLIENT_ID_KEY) or data.get("client_id"))
+    if client_id:
+        out[PROVIDER_CLIENT_ID_KEY] = client_id
+
+    portal_url = _nonempty_str(data.get("portal_login_url"))
+    if portal_url and is_safe_customer_url(portal_url):
+        out["account_portal_url"] = portal_url
+
+    portal_credentials = data.get("portal_credentials")
+    if isinstance(portal_credentials, dict):
+        email = _nonempty_str(portal_credentials.get("email"))
+        password = _nonempty_str(portal_credentials.get("password"))
+        if email:
+            out["portal_email"] = email
+        if password:
+            out["portal_password"] = password
+
+    for key in ("is_mock", "test_mode", "test_only"):
+        if key in data:
+            out[key] = bool(data.get(key))
+    return out
+
+
+def merge_provider_credentials(*parts: dict[str, Any] | None) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        for key, value in part.items():
+            if value in (None, "", [], {}):
+                continue
+            merged[str(key)] = value
+    return merged
+
+
+def merge_subscription_credentials(sub: Any, creds: dict[str, Any] | None) -> dict[str, Any]:
+    merged = merge_provider_credentials(
+        load_provider_credentials(getattr(sub, "credentials_json", None)),
+        creds,
+    )
+    store_subscription_credentials(sub, merged)
+    return merged
+
+
+def stored_provider_client_id(raw: Any) -> Optional[str]:
+    creds = load_provider_credentials(raw)
+    return _nonempty_str(creds.get(PROVIDER_CLIENT_ID_KEY))
 
 
 def credential_log_fields(creds: dict[str, Any] | None) -> dict[str, Any]:
@@ -266,23 +396,33 @@ def link_in_bio_manage_url(service_id: Any) -> Optional[str]:
 
 
 def is_safe_customer_url(url: Any) -> bool:
+    """True only for HTTPS URLs on the Deltapreneur white-label portal host.
+
+    Rejects CoBrother hosts, ResellPortal panel hosts, tokens, and placeholders.
+    """
     text = _nonempty_str(url)
     if not text:
         return False
     lower = text.lower()
     if "resellportal" in lower:
         return False
-    if "access_token=" in lower or "api_token=" in lower:
+    if "access_token=" in lower or "api_token=" in lower or "api_key=" in lower:
         return False
     parts = urlsplit(text)
-    if parts.scheme not in {"http", "https"} or not parts.netloc:
+    if parts.scheme != "https" or not parts.netloc:
         return False
     host = (parts.netloc or "").lower().split(":", 1)[0]
-    if host in PLACEHOLDER_URL_HOSTS:
+    if host in BLOCKED_PROVIDER_HOSTS or host in PLACEHOLDER_URL_HOSTS:
         return False
     if host.endswith(".example.com") or host.endswith(".example.test") or host.endswith(".resellportal.com"):
         return False
-    if "workspace.cobrother.com" in host:
+    if host.endswith(".cobrother.com") or host == "cobrother.com":
+        return False
+    # Only the confirmed Deltapreneur portal host is customer-safe.
+    if host != CUSTOMER_STOREFRONT_HOST:
+        return False
+    path_lower = parts.path.lower()
+    if any(secret in path_lower for secret in ("access_token", "api_token", "api_key", "token", "secret")):
         return False
     for key, _value in parse_qsl(parts.query, keep_blank_values=True):
         if key.lower() in SECRET_QUERY_KEYS:
@@ -308,6 +448,8 @@ def _strip_secret_query(url: str) -> Optional[str]:
     parts = urlsplit(url)
     host = (parts.netloc or "").lower()
     if "resellportal" in host or "resellportal" in url.lower():
+        return None
+    if any(key.lower() in SECRET_QUERY_KEYS for key, _value in parse_qsl(parts.query, keep_blank_values=True)):
         return None
     kept = [
         (key, value)
@@ -491,8 +633,17 @@ def resolve_link_in_bio_access(db: Any, *, user_id: str, service_id: str) -> dic
 
 
 CREDENTIAL_FIELD_LABELS = {
-    "email": "Email",
-    "password": "Password",
+    "client_access_url": "Service Access",
+    "account_portal_url": "Portal URL",
+    "portal_email": "Portal Email",
+    "portal_password": "Portal Password",
+    "product_email": "Product Email",
+    "product_password": "Product Password",
+    "product_username": "Product Username",
+    "product_url": "Product URL",
+    "product_login_url": "Product Login URL",
+    "email": "Product Email",
+    "password": "Product Password",
     "username": "Username",
     "user_name": "Username",
     "access_url": "Login URL",
@@ -518,6 +669,16 @@ CREDENTIAL_FIELD_LABELS = {
     "api_token": "API Token",
     "qr": "QR / Activation Information",
     "qr_code": "QR Code",
+    "qr_code_url": "QR Installation URL",
+    "activation_url": "Activation URL",
+    "bio_url": "Public Page",
+    "iccid": "ICCID",
+    "esim_status": "eSIM Status",
+    "slug": "Slug",
+    "domain": "Domain",
+    "country": "Country",
+    "status": "Status",
+    "sending_plan": "Sending Plan",
 }
 
 
@@ -662,6 +823,11 @@ def customer_access_email_fields(creds: dict[str, Any] | None) -> tuple[list[dic
     url_candidates: dict[str, str] = {}
     seen_url_values: set[str] = set()
     data = creds if isinstance(creds, dict) else {}
+    def section_for(key_lower: str) -> str:
+        if key_lower.startswith("portal_") or key_lower == "account_portal_url":
+            return "Portal login"
+        return "Product access"
+
     for key, value in data.items():
         key_text = str(key or "").strip()
         key_lower = key_text.lower()
@@ -692,8 +858,9 @@ def customer_access_email_fields(creds: dict[str, Any] | None) -> tuple[list[dic
         fields.append(
             {
                 "key": key_text,
-                "label": "Login email" if key_lower == "email" else humanize_credential_key(key_text),
+                "label": humanize_credential_key(key_text),
                 "value": rendered,
+                "section": section_for(key_lower),
             }
         )
     return fields, _pick_login_url(url_candidates)
@@ -715,6 +882,8 @@ def access_email_payload(
     if not is_captured_payment(getattr(sub, "payment_status", None)):
         return None
     creds = load_provider_credentials(getattr(sub, "credentials_json", None))
+    if any(bool(creds.get(key)) for key in ("is_mock", "test_mode", "test_only", "simulated")):
+        return None
     fields, access_url = customer_access_email_fields(creds)
     if not fields:
         return None
@@ -741,6 +910,9 @@ def access_email_resend_block_reason(sub: Any, *, user: Any = None) -> Optional[
         return "Access email can only be sent after payment is captured."
     if not credentials_blob_present(getattr(sub, "credentials_json", None)):
         return "Access information is not available."
+    creds = load_provider_credentials(getattr(sub, "credentials_json", None))
+    if any(bool(creds.get(key)) for key in ("is_mock", "test_mode", "test_only", "simulated")):
+        return "Access email is not available for simulated test-mode provisioning."
     if not _nonempty_str(getattr(user, "email", None)):
         return "Customer email is not available."
     return None

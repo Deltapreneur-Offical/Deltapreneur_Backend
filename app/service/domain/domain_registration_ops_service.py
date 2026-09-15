@@ -18,6 +18,7 @@ from app.integrations.razorpay import client as rzp
 from app.repository.domain_registration_order_repository import (
     DomainRegistrationOrderRepository,
 )
+from app.service.cart.cart_checkout_service import CartCheckoutService
 from app.service.domain.domain_registration_service import DomainRegistrationService
 from app.utils.registration_enums import RegistrationOrderStatus
 
@@ -129,6 +130,7 @@ class DomainRegistrationOpsService:
                 "registrationAttempted": registration_attempted,
                 "registrationSuccessful": registration_successful,
                 "ordersFound": orders_found,
+                "technologyWebhook": cart_outcome,
                 "needsAttention": needs_attention,
                 "skipReason": outcome.get("skipReason"),
                 "results": outcome.get("results") or [],

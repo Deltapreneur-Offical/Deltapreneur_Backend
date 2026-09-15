@@ -37,6 +37,10 @@ from app.service.domain.domain_enquiry_service import (
 from app.service.domain.managed_acquisition_pricing import (
     is_openprovider_managed_registration,
 )
+from app.service.resellportal.product_mapper import (
+    resolve_product_key,
+    validate_order_input,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +78,11 @@ class CartService:
         )
         if existing:
             await self._validate_product_available(
-                req.product_type, req.product_id, user_id, req.metadata
+                req.product_type,
+                req.product_id,
+                user_id,
+                req.metadata or existing.metadata_json,
+                selected_plan=req.selected_plan or existing.selected_plan,
             )
             await self._enforce_managed_acquisition_cart_rules(
                 user_id,
@@ -106,7 +114,11 @@ class CartService:
             return await self._build_item_response(existing)
 
         await self._validate_product_available(
-            req.product_type, req.product_id, user_id, req.metadata
+            req.product_type,
+            req.product_id,
+            user_id,
+            req.metadata,
+            selected_plan=req.selected_plan,
         )
         await self._enforce_managed_acquisition_cart_rules(
             user_id,
@@ -227,6 +239,14 @@ class CartService:
             item.co_brother_opt_in = req.co_brother_opt_in
         if req.metadata is not None:
             item.metadata_json = _sanitize_client_cart_metadata(req.metadata)
+
+        await self._validate_product_available(
+            item.product_type,
+            item.product_id,
+            user_id,
+            item.metadata_json,
+            selected_plan=item.selected_plan,
+        )
 
         await self._repo.save(item)
         return await self._build_item_response(item)
@@ -511,6 +531,8 @@ class CartService:
         product_id: uuid.UUID,
         user_id: uuid.UUID,
         metadata: Optional[dict] = None,
+        *,
+        selected_plan: Optional[str] = None,
     ) -> None:
         if product_type == CartProductType.DOMAIN_LISTING:
             listing = await self._get_domain_listing(product_id)
@@ -548,8 +570,31 @@ class CartService:
                         raise AppException("Technology listing not found.", status_code=404)
                     if not fallback.get("is_available", True):
                         raise AppException("This technology is not available.", status_code=400)
+                    slug = str(fallback.get("slug") or "").strip()
+                    name = str(fallback.get("name") or slug or "Technology service").strip()
+                    product_key = resolve_product_key(slug, fallback.get("provider_product_key"))
                 elif not tech_service.is_available:
                     raise AppException("This technology is not available.", status_code=400)
+                else:
+                    slug = str(tech_service.slug or "").strip()
+                    name = str(tech_service.name or slug or "Technology service").strip()
+                    product_key = resolve_product_key(slug, tech_service.provider_product_key)
+
+                if not product_key:
+                    raise AppException(
+                        "This technology service is not available for automated purchase.",
+                        status_code=400,
+                    )
+                validation_meta = dict(metadata or {})
+                if selected_plan:
+                    validation_meta.setdefault("selectedPlan", selected_plan)
+                    validation_meta.setdefault("planCode", selected_plan)
+                ok, missing = validate_order_input(slug, validation_meta)
+                if not ok:
+                    raise AppException(
+                        f"{name} requires additional configuration before purchase: {', '.join(missing)}.",
+                        status_code=400,
+                    )
 
         elif product_type == CartProductType.VENTURE_DEAL:
             venture = await self._get_venture(product_id)

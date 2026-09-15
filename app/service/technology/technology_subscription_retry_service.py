@@ -42,8 +42,8 @@ from app.service.platform.track_record_service import (
 )
 from app.service.resellportal.product_mapper import (
     build_order_parameters,
-    get_product_key,
     is_provider_mapped,
+    resolve_product_key,
     validate_order_input,
 )
 from app.service.technology.provider_access import (
@@ -51,8 +51,10 @@ from app.service.technology.provider_access import (
     confirmation_email_kwargs,
     customer_display_name,
     extract_provider_credentials,
+    load_provider_credentials,
+    merge_subscription_credentials,
     real_provider_service_id,
-    store_subscription_credentials,
+    stored_provider_client_id,
 )
 from app.service.technology.technology_purchase_status import retry_result_payload
 
@@ -217,17 +219,32 @@ class TechnologySubscriptionRetryService:
             service = await self._service_for(sub.service_slug)
             product_key = None
             if service is not None:
-                product_key = getattr(service, "provider_product_key", None) or get_product_key(service.slug)
+                product_key = resolve_product_key(service.slug, getattr(service, "provider_product_key", None))
             else:
-                product_key = get_product_key(sub.service_slug)
+                product_key = resolve_product_key(sub.service_slug)
 
             if not product_key or not is_provider_mapped(sub.service_slug):
-                # Not provider-mapped (e.g. WordPress Plugin Pack) → manual
-                # fulfillment only. Never POST /orders.
+                # Unmapped catalogue slug → manual fulfillment only. Never POST /orders.
                 return await self._mark_manual_fulfillment(sub)
 
             user = await self._user_for(sub.user_id)
             user_email = user.email if user is not None else sub.user_id
+            portal_client_id, portal_account, portal_error = await self._ensure_portal_account(sub, user_email)
+            if portal_error:
+                sub.status = "PENDING"
+                sub.last_provider_status = "PROVISIONING_PENDING"
+                sub.last_provider_error = portal_error
+                sub.next_retry_at = self._next_retry(sub)
+                await self._session.flush()
+                await self._update_track(
+                    sub,
+                    FulfillmentStatus.IN_PROGRESS,
+                    OverallStatus.PENDING,
+                    error_code="PROVIDER_CLIENT_ERROR",
+                    error_message=portal_error,
+                )
+                await self._send_pending_email(sub, user_email, needs_input=False)
+                return "pending"
 
             # 2. NEVER blindly POST /orders: reconcile existing provider orders first.
             existing = self._client.find_matching_order(
@@ -243,6 +260,8 @@ class TechnologySubscriptionRetryService:
 
             # 3. Validate required customer input before provisioning.
             metadata = self._subscription_metadata(sub)
+            metadata.setdefault("selectedPlan", sub.plan_code)
+            metadata.setdefault("planCode", sub.plan_code)
             ok, missing = validate_order_input(sub.service_slug, metadata)
             if not ok:
                 sub.status = "PENDING"
@@ -279,6 +298,8 @@ class TechnologySubscriptionRetryService:
                 user_id=sub.user_id,
                 product_key=product_key,
                 order_parameters=order_parameters,
+                provider_client_id=portal_client_id,
+                portal_account=portal_account,
             )
 
             provider_success = prov_res.get("success") is True
@@ -296,6 +317,8 @@ class TechnologySubscriptionRetryService:
                     }
                     return await self._mark_pending(sub, prov_res, user_email)
                 return await self._mark_active(sub, prov_res, user_email, user=user)
+            if provider_success and provider_status == "TEST_SIMULATED":
+                return await self._mark_simulated(sub, prov_res, user_email)
             if provider_success and provider_status in ("PENDING", "PROVISIONING_PENDING"):
                 return await self._mark_pending(sub, prov_res, user_email)
             return await self._mark_failed(sub, prov_res, user_email)
@@ -323,7 +346,7 @@ class TechnologySubscriptionRetryService:
         sub.provider_subscription_id = (
             real_provider_service_id(prov_res, user_id=sub.user_id) or sub.provider_subscription_id
         )
-        store_subscription_credentials(sub, prov_res.get("credentials") or {})
+        merge_subscription_credentials(sub, prov_res.get("credentials") or {})
         start, end = prov_res.get("current_period_start"), prov_res.get("current_period_end")
         if start is None or end is None:
             start, end = _sub_periods(sub.billing_cycle)
@@ -345,12 +368,59 @@ class TechnologySubscriptionRetryService:
         if mapped_service_id:
             sub.provider_subscription_id = mapped_service_id
         if prov_res.get("credentials"):
-            store_subscription_credentials(sub, prov_res.get("credentials"))
+            merge_subscription_credentials(sub, prov_res.get("credentials"))
         sub.next_retry_at = self._next_retry(sub)
         await self._session.flush()
         await self._update_track(sub, FulfillmentStatus.IN_PROGRESS, OverallStatus.PENDING)
         await self._send_pending_email(sub, user_email, needs_input=False)
         return "pending"
+
+    async def _mark_simulated(self, sub, prov_res, user_email: str) -> str:
+        sub.status = "TEST_SIMULATED"
+        sub.provider_order_id = prov_res.get("provider_order_id") or sub.provider_order_id
+        mapped_service_id = real_provider_service_id(prov_res, user_id=sub.user_id)
+        if mapped_service_id:
+            sub.provider_subscription_id = mapped_service_id
+        if prov_res.get("credentials"):
+            merge_subscription_credentials(sub, prov_res.get("credentials"))
+        sub.next_retry_at = None
+        sub.needs_review = False
+        sub.last_provider_status = "TEST_SIMULATED"
+        sub.last_provider_error = (
+            prov_res.get("message")
+            or "ResellPortal test-mode order was simulated and is not customer-accessible."
+        )
+        await self._session.flush()
+        await self._update_track(
+            sub,
+            FulfillmentStatus.IN_PROGRESS,
+            OverallStatus.PENDING,
+            error_message=sub.last_provider_error,
+        )
+        if not sub.email_sent:
+            try:
+                await MailService.send_technology_purchase_pending_email(
+                    to_email=user_email,
+                    customer_name=user_email,
+                    service_name=sub.service_name,
+                    plan_name=sub.plan_code.replace("_", " ").title(),
+                    billing_cycle=sub.billing_cycle,
+                    cobrother_order_id=str(sub.id),
+                    razorpay_payment_id=sub.razorpay_payment_id,
+                    amount_inr=float(sub.price or 0.0),
+                    purchase_date=datetime.now(timezone.utc).strftime("%d %b %Y"),
+                    reason=(
+                        "This was processed in ResellPortal test mode. "
+                        "The provider simulated the order, so no customer-accessible service "
+                        "was created in the portal."
+                    ),
+                    purchases_url=f"{settings.FRONTEND_BASE_URL.rstrip('/')}/purchases",
+                )
+                sub.email_sent = True
+                await self._session.flush()
+            except Exception:
+                logger.exception("technology.retry.simulated_email.failed sub=%s", sub.id)
+        return "test_simulated"
 
     async def _mark_failed(self, sub, prov_res, user_email: str) -> str:
         sub.last_provider_error = str(
@@ -386,7 +456,7 @@ class TechnologySubscriptionRetryService:
         )
         adopted_creds = extract_provider_credentials(existing)
         if adopted_creds:
-            store_subscription_credentials(sub, adopted_creds)
+            merge_subscription_credentials(sub, adopted_creds)
         provider_status = str(existing.get("status") or "PENDING").upper()
         sub.last_provider_status = provider_status
         if provider_status == "ACTIVE" and sub.provider_subscription_id:
@@ -446,6 +516,49 @@ class TechnologySubscriptionRetryService:
             return result.scalar_one_or_none()
         except Exception:
             return None
+
+    async def _stored_portal_account_for_user(self, user_id: str) -> dict[str, Any] | None:
+        try:
+            result = await self._session.execute(
+                select(TechnologySubscriptionEntity)
+                .where(
+                    TechnologySubscriptionEntity.user_id == user_id,
+                    TechnologySubscriptionEntity.credentials_json.is_not(None),
+                    TechnologySubscriptionEntity.is_deleted.is_(False),
+                )
+                .order_by(TechnologySubscriptionEntity.created_at.asc())
+            )
+        except Exception:
+            logger.warning("technology.retry.portal_account_lookup_failed user=%s", user_id)
+            return None
+        for row in result.scalars().all():
+            creds = load_provider_credentials(row.credentials_json)
+            if stored_provider_client_id(creds):
+                return creds
+        return None
+
+    async def _ensure_portal_account(self, sub, user_email: str) -> tuple[str | int | None, dict[str, Any], str | None]:
+        current = load_provider_credentials(getattr(sub, "credentials_json", None))
+        client_id = stored_provider_client_id(current)
+        if client_id:
+            return client_id, current, None
+
+        existing = await self._stored_portal_account_for_user(sub.user_id)
+        if existing:
+            merged = merge_subscription_credentials(sub, existing)
+            await self._session.flush()
+            return stored_provider_client_id(merged), merged, None
+
+        created = self._client.create_portal_client(
+            user_email=user_email,
+            user_id=sub.user_id,
+        )
+        if created.get("success") is not True or not stored_provider_client_id(created):
+            return None, current, str(created.get("error") or "Provider client creation failed.")
+
+        merged = merge_subscription_credentials(sub, created)
+        await self._session.flush()
+        return stored_provider_client_id(merged), merged, None
 
     @staticmethod
     def _subscription_metadata(sub) -> dict[str, Any]:

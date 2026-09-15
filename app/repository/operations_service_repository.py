@@ -34,6 +34,7 @@ class OperationsServiceRepository:
         self,
         *,
         service_type: str | None = None,
+        page_size: int | None = None,
     ) -> list[OperationsService]:
         stmt = (
             select(OperationsService)
@@ -48,6 +49,8 @@ class OperationsServiceRepository:
         )
         if service_type:
             stmt = stmt.where(OperationsService.service_type == service_type)
+        if page_size is not None:
+            stmt = stmt.limit(max(1, int(page_size)))
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 

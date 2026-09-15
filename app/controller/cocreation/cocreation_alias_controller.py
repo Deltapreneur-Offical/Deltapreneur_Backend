@@ -67,7 +67,16 @@ async def my_cocreation_purchases(
         "purchases.summary.technology user=%s count=%s items=%s",
         current_user.id,
         len(items),
-        [{"id": str(x.get("id")), "softwareId": str(x.get("software", {}).get("id")), "softwareName": x.get("software", {}).get("name"), "paymentStatus": x.get("paymentStatus"), "completionStatus": x.get("completionStatus")} for x in items],
+        [
+            {
+                "id": str(x.get("id")),
+                "softwareId": str((x.get("software") or {}).get("id")),
+                "softwareName": (x.get("software") or {}).get("name"),
+                "paymentStatus": x.get("paymentStatus"),
+                "completionStatus": x.get("completionStatus"),
+            }
+            for x in items
+        ],
     )
     return ApiResponse(
         success=True,

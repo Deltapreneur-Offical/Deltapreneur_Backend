@@ -42,17 +42,26 @@ def _attach_view_counts(db: Session, items: list[dict]) -> list[dict]:
 @router.get("")
 async def list_operations_services(
     service_type: str | None = Query(None, alias="serviceType"),
+    page_size: int | None = Query(
+        None,
+        ge=1,
+        le=200,
+        description="Omit to return all services (legacy). Set to limit the public catalog.",
+    ),
     service: OperationsServiceService = Depends(_get_service),
     db: Session = Depends(get_db),
 ) -> dict:
     normalized_type = service_type.strip().lower() if service_type else None
     if normalized_type and normalized_type not in {"virtual_assistance", "compliance"}:
         normalized_type = None
-    cache_key = f"operations:public:{normalized_type or 'all'}"
+    cache_key = f"operations:public:{normalized_type or 'all'}:{page_size}"
     cached = public_list_cache_get(cache_key)
     if cached is not None:
         return cached
-    items = await service.list_public(service_type=normalized_type)
+    items = await service.list_public(
+        service_type=normalized_type,
+        page_size=page_size,
+    )
     items = _attach_view_counts(db, items)
     payload = {
         "success": True,

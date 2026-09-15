@@ -28,6 +28,27 @@ def _is_db_connection_error(exc: BaseException) -> bool:
     if isinstance(exc, (ConnectionRefusedError, OSError)):
         return True
 
+    _DB_CONN_TOKENS = (
+        "connection refused",
+        "refused the network connection",
+        "could not connect",
+        "server closed the connection",
+        "connection timed out",
+        "timeout expired",
+        "no connection to the server",
+        "actively refused",
+        "winerror 10061",
+        "winerror 1225",
+        "winerror 10060",
+        "could not translate host name",
+        "name or service not known",
+        "emaxconnsession",
+        "max clients reached",
+        "too many clients",
+        "remaining connection slots",
+        "sorry, too many clients already",
+    )
+
     cause = exc
     seen: set[int] = set()
     while cause is not None and id(cause) not in seen:
@@ -36,27 +57,12 @@ def _is_db_connection_error(exc: BaseException) -> bool:
             return True
         if isinstance(cause, (ConnectionRefusedError, OSError)):
             return True
+        message = str(cause).lower()
+        if any(token in message for token in _DB_CONN_TOKENS):
+            return True
         cause = getattr(cause, "__cause__", None) or getattr(cause, "orig", None)
 
-    message = str(exc).lower()
-    return any(
-        token in message
-        for token in (
-            "connection refused",
-            "refused the network connection",
-            "could not connect",
-            "server closed the connection",
-            "connection timed out",
-            "timeout expired",
-            "no connection to the server",
-            "actively refused",
-            "winerror 10061",
-            "winerror 1225",
-            "winerror 10060",
-            "could not translate host name",
-            "name or service not known",
-        )
-    )
+    return False
 
 
 def _database_unavailable_response() -> JSONResponse:
