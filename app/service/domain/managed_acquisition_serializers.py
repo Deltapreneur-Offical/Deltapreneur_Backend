@@ -6,6 +6,7 @@ from datetime import date, datetime
 from typing import Any
 
 from app.entity.cobranding.domain_enquiry_entity import DomainEnquiry
+from app.service.domain.domain_enquiry_pipeline import is_listing_pipeline_placeholder
 from app.entity.domain.openprovider_managed_acquisition_entity import (
     OpenProviderManagedAcquisition,
 )
@@ -169,11 +170,8 @@ def serialize_marketplace_enquiry_as_acquisition(
     """Map DomainEnquiry into unified buyer acquisition DTO (no marketplace labels in UI)."""
     if enquiry is None:
         return None
-    # Skip pipeline placeholders
-    if (
-        enquiry.message == "Listed premium domain (Pending buyer enquiry)"
-        and enquiry.full_name == "No buyer enquiry yet"
-    ):
+    # Skip pipeline placeholders — these are listed domains, not buyer tickets.
+    if is_listing_pipeline_placeholder(enquiry):
         return None
 
     listing = enquiry.domain_listing

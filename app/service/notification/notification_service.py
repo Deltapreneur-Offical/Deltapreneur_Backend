@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 
@@ -10,6 +11,9 @@ from app.entity.notification.notification_type import NotificationType
 from app.entity.user.app_user import AppUser
 from app.repository.notification_repository import NotificationRepository
 from app.websocket.manager import notification_connection_manager
+
+# Strong references to in-flight broadcast tasks; asyncio only holds weak ones.
+_PENDING_BROADCASTS: set[asyncio.Task] = set()
 
 
 class NotificationService:
@@ -56,11 +60,31 @@ class NotificationService:
         notification_data: dict,
     ) -> None:
         try:
-            anyio.from_thread.run(
-                notification_connection_manager.send_personal_notification,
-                user_id,
-                notification_data,
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop is None:
+                # Sync caller on a worker thread: hand the coroutine back to the loop.
+                anyio.from_thread.run(
+                    notification_connection_manager.send_personal_notification,
+                    user_id,
+                    notification_data,
+                )
+                return
+
+            # Already on the event loop thread, where anyio.from_thread.run raises
+            # NoEventLoopError. Schedule instead, holding a reference so the task
+            # is not garbage collected before it runs.
+            task = loop.create_task(
+                notification_connection_manager.send_personal_notification(
+                    user_id,
+                    notification_data,
+                )
             )
+            _PENDING_BROADCASTS.add(task)
+            task.add_done_callback(_PENDING_BROADCASTS.discard)
         except Exception:
             logging.getLogger(__name__).exception(
                 "Notification saved but live WebSocket broadcast failed"

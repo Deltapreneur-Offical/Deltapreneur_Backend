@@ -15,6 +15,7 @@ from app.entity.user.app_user import AppUser
 from app.utils.domain_listing_utils import listing_type_for
 from app.utils.equity_percent import normalize_equity_percent
 from app.utils.money import round_inr
+from app.service.domain.domain_enquiry_pipeline import is_listing_pipeline_placeholder
 
 
 def user_brief(user: AppUser | None) -> dict[str, Any] | None:
@@ -551,4 +552,5 @@ def serialize_domain_enquiry(enquiry: DomainEnquiry) -> dict[str, Any]:
         "createdAt": _iso_datetime(enquiry.created_at),
         "domain": domain_map,
         "isVirtual": False,
+        "isPlaceholder": is_listing_pipeline_placeholder(enquiry),
     }
