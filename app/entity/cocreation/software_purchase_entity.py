@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, String
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, String, Text, text
 import sqlalchemy
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID
@@ -29,6 +29,24 @@ class SoftwarePurchase(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         Index("idx_software_purchases_buyer", "buyer_id"),
         Index("idx_software_purchases_rzp_order", "razorpay_order_id"),
+        Index(
+            "uq_software_purchases_rzp_order_software",
+            "razorpay_order_id",
+            "software_id",
+            unique=True,
+            postgresql_where=text(
+                "razorpay_order_id IS NOT NULL AND btrim(razorpay_order_id) <> ''"
+            ),
+        ),
+        Index(
+            "uq_software_purchases_rzp_payment_software",
+            "razorpay_payment_id",
+            "software_id",
+            unique=True,
+            postgresql_where=text(
+                "razorpay_payment_id IS NOT NULL AND btrim(razorpay_payment_id) <> ''"
+            ),
+        ),
     )
 
     software_id: Mapped[uuid.UUID] = mapped_column(
@@ -48,6 +66,16 @@ class SoftwarePurchase(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     razorpay_order_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     razorpay_payment_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    razorpay_refund_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    refund_completed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    delivered_github_link: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    delivered_documentation_urls: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    delivered_download_urls: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     cobrother_help_razorpay_order_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     payment_status: Mapped[SoftwarePaymentStatus] = mapped_column(
         SAEnum(SoftwarePaymentStatus, name="software_payment_status_enum", create_constraint=False),

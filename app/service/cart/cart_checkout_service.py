@@ -974,6 +974,39 @@ class CartCheckoutService:
                     batch_id=batch_id,
                 )
                 item.metadata_json["_checkout_registration_order_id"] = str(pending.id)
+            if item.product_type == CartProductType.TECHNOLOGY:
+                from app.entity.cocreation.software_entity import Software
+                from app.service.cocreation.cocreation_payment_service import (
+                    CocreationPaymentService,
+                )
+                from sqlalchemy import select as sa_select
+                from sqlalchemy.orm import selectinload as sa_selectinload
+
+                sw_stmt = (
+                    sa_select(Software)
+                    .where(Software.id == item.product_id, Software.is_deleted.is_(False))
+                    .options(sa_selectinload(Software.pricing_plans))
+                )
+                software_row = (
+                    await self._session.execute(sw_stmt)
+                ).scalar_one_or_none()
+                if software_row is not None:
+                    pending_purchase = await CocreationPaymentService(
+                        self._session
+                    ).create_pending_from_cart(
+                        software=software_row,
+                        buyer=buyer,
+                        razorpay_order_id=rzp_order["id"],
+                        buyer_full_name=resolved_buyer_name,
+                        buyer_email=resolved_buyer_email,
+                        buyer_phone=resolved_buyer_phone,
+                        selected_plan=item.selected_plan,
+                        addon_services=item.addon_services,
+                        co_brother_opt_in=bool(item.co_brother_opt_in),
+                    )
+                    item.metadata_json["_checkout_software_purchase_id"] = str(
+                        pending_purchase.id
+                    )
             await self._repo.save(item)
 
         await self._session.commit()
@@ -1736,6 +1769,14 @@ class CartCheckoutService:
             result = await self._session.execute(stmt)
             software = result.scalar_one_or_none()
             if software is not None:
+                from app.service.cocreation.technology_verification_guard import (
+                    assert_technology_purchasable,
+                )
+
+                try:
+                    assert_technology_purchasable(software)
+                except AppException:
+                    return None
                 if software.software_status != SoftwareStatus.AVAILABLE:
                     return None
                 if software.listed_by_user_id == buyer.id:
@@ -2725,79 +2766,107 @@ class CartCheckoutService:
                 seller_payout = float(seller_price) if seller_price is not None else 0.0
                 platform_fee = round(base_price - seller_payout, 2)
 
-            now = datetime.now(timezone.utc)
-            purchase = SoftwarePurchase(
-                software_id=item.product_id,
-                buyer_id=buyer.id,
-                buyer_full_name=buyer_name,
-                buyer_email=buyer_email,
-                buyer_phone=buyer_phone,
-                purchase_addon_services=item.addon_services or None,
-                razorpay_order_id=(item.metadata_json or {}).get("_checkout_razorpay_order_id", ""),
+        if software is not None:
+            from app.service.cocreation.cocreation_payment_service import (
+                CocreationPaymentService,
+                buyer_delivery_github,
+                snapshot_delivery,
+            )
+            from app.service.cocreation.technology_verification_guard import (
+                assert_technology_purchasable,
+            )
+
+            assert_technology_purchasable(software)
+            razorpay_order_id = str(
+                (item.metadata_json or {}).get("_checkout_razorpay_order_id") or ""
+            ).strip() or None
+            existing_purchase = None
+            if razorpay_order_id:
+                existing_purchase = await purchase_repo.get_by_order_and_software(
+                    razorpay_order_id, item.product_id
+                )
+            if existing_purchase is None and razorpay_payment_id:
+                by_pay = await purchase_repo.get_by_razorpay_payment_id(razorpay_payment_id)
+                if by_pay is not None and by_pay.software_id == item.product_id:
+                    existing_purchase = by_pay
+            if (
+                existing_purchase is not None
+                and existing_purchase.payment_status == SoftwarePaymentStatus.COMPLETED
+            ):
+                snapshot_delivery(existing_purchase, software)
+                return {
+                    "type": "TECHNOLOGY",
+                    "purchaseId": str(existing_purchase.id),
+                    "softwareId": str(item.product_id),
+                    "alreadyProcessed": True,
+                    "githubLink": buyer_delivery_github(existing_purchase, software),
+                }
+
+            payment_service = CocreationPaymentService(self._session)
+            if existing_purchase is not None:
+                purchase = existing_purchase
+            else:
+                purchase = SoftwarePurchase(
+                    software_id=item.product_id,
+                    buyer_id=buyer.id,
+                    buyer_full_name=buyer_name,
+                    buyer_email=buyer_email,
+                    buyer_phone=buyer_phone,
+                    purchase_addon_services=item.addon_services or None,
+                    razorpay_order_id=razorpay_order_id,
+                    razorpay_payment_id=razorpay_payment_id,
+                    payment_status=SoftwarePaymentStatus.CREATED,
+                    completion_status=SoftwarePurchaseCompletionStatus.CONFIRMED,
+                    co_brother_opt_in=item.co_brother_opt_in,
+                    co_brother_help_paid=item.co_brother_opt_in,
+                    selected_plan=plan_enum,
+                    gross_amount_inr=base_price,
+                    platform_fee_inr=platform_fee,
+                    seller_payout_inr=seller_payout,
+                )
+                await purchase_repo.create(purchase)
+
+            await payment_service._finalize_paid_purchase(
+                purchase,
+                software=software,
                 razorpay_payment_id=razorpay_payment_id,
-                payment_status=SoftwarePaymentStatus.COMPLETED,
-                completion_status=SoftwarePurchaseCompletionStatus.CONFIRMED,
-                co_brother_opt_in=item.co_brother_opt_in,
-                co_brother_help_paid=item.co_brother_opt_in,
-                sold_at=now,
-                selected_plan=plan_enum,
-                gross_amount_inr=base_price,
-                platform_fee_inr=platform_fee,
-                seller_payout_inr=seller_payout,
+                buyer=buyer,
             )
+            return {
+                "type": "TECHNOLOGY",
+                "purchaseId": str(purchase.id) if purchase is not None else None,
+                "softwareId": str(item.product_id),
+                "githubLink": buyer_delivery_github(purchase, software),
+            }
 
-            if plan_enum:
-                if plan_enum == TechnologyPricingPlanDuration.ONE_MONTH:
-                    purchase.expiry_date = now + timedelta(days=30)
-                elif plan_enum == TechnologyPricingPlanDuration.THREE_MONTHS:
-                    purchase.expiry_date = now + timedelta(days=90)
-                elif plan_enum == TechnologyPricingPlanDuration.SIX_MONTHS:
-                    purchase.expiry_date = now + timedelta(days=180)
-                elif plan_enum == TechnologyPricingPlanDuration.TWELVE_MONTHS:
-                    purchase.expiry_date = now + timedelta(days=365)
+        # ── TechnologyServiceEntity path ──
+        # Provider-powered services (AI Business Suite etc.) live in
+        # technology_services_catalogue and are provisioned via ResellPortal.
+        # No SoftwarePurchase row is created (its FK targets software_listings).
+        plans_json = getattr(tech_service, "plans_json", None) if not isinstance(tech_service, dict) else tech_service.get("plans_json")
+        override_monthly = getattr(tech_service, "price_override_monthly", None) if not isinstance(tech_service, dict) else tech_service.get("price_override_monthly")
+        override_annually = getattr(tech_service, "price_override_annually", None) if not isinstance(tech_service, dict) else tech_service.get("price_override_annually")
 
-            await purchase_repo.create(purchase)
+        base_price = CartService._tech_service_plan_price_inr(
+            plans_json,
+            item.selected_plan,
+            meta,
+            override_monthly=override_monthly,
+            override_annually=override_annually,
+        )
+        seller_payout = 0.0
+        platform_fee = round(base_price - seller_payout, 2)
 
-            software.software_status = SoftwareStatus.SOLD
-            await self._session.flush()
-
-            req = CoBrotherRequest(
-                request_type=CoBrotherRequestType.COCREATION,
-                entity_id=purchase.id,
-                entity_snapshot=software.name,
-                lister_id=purchase.buyer_id,
-                status=CoBrotherRequestStatus.PENDING,
-            )
-            await cobrother_repo.create(req)
-        else:
-            # ── TechnologyServiceEntity path ──
-            # Provider-powered services (AI Business Suite etc.) live in
-            # technology_services_catalogue and are provisioned via ResellPortal.
-            # No SoftwarePurchase row is created (its FK targets software_listings).
-            plans_json = getattr(tech_service, "plans_json", None) if not isinstance(tech_service, dict) else tech_service.get("plans_json")
-            override_monthly = getattr(tech_service, "price_override_monthly", None) if not isinstance(tech_service, dict) else tech_service.get("price_override_monthly")
-            override_annually = getattr(tech_service, "price_override_annually", None) if not isinstance(tech_service, dict) else tech_service.get("price_override_annually")
-
-            base_price = CartService._tech_service_plan_price_inr(
-                plans_json,
-                item.selected_plan,
-                meta,
-                override_monthly=override_monthly,
-                override_annually=override_annually,
-            )
-            seller_payout = 0.0
-            platform_fee = round(base_price - seller_payout, 2)
-
-            req = CoBrotherRequest(
-                request_type=CoBrotherRequestType.COCREATION,
-                entity_id=item.product_id,
-                entity_snapshot=getattr(tech_service, "name", None) if not isinstance(tech_service, dict) else tech_service.get("name"),
-                lister_id=buyer.id,
-                razorpay_order_id=(item.metadata_json or {}).get("_checkout_razorpay_order_id", ""),
-                razorpay_payment_id=razorpay_payment_id,
-                status=CoBrotherRequestStatus.PENDING,
-            )
-            await cobrother_repo.create(req)
+        req = CoBrotherRequest(
+            request_type=CoBrotherRequestType.COCREATION,
+            entity_id=item.product_id,
+            entity_snapshot=getattr(tech_service, "name", None) if not isinstance(tech_service, dict) else tech_service.get("name"),
+            lister_id=buyer.id,
+            razorpay_order_id=(item.metadata_json or {}).get("_checkout_razorpay_order_id", ""),
+            razorpay_payment_id=razorpay_payment_id,
+            status=CoBrotherRequestStatus.PENDING,
+        )
+        await cobrother_repo.create(req)
 
         product_name = str(
             (item.metadata_json or {}).get("productName")
@@ -2810,31 +2879,7 @@ class CartCheckoutService:
         ).strip()
 
         # ------------------------------------------------------------------ #
-        # Marketplace software path (Azure etc.) — no provider provisioning. #
-        # The SoftwarePurchase record above IS the fulfillment. Never create  #
-        # a technology subscription for it.                                   #
-        # ------------------------------------------------------------------ #
-        if software is not None:
-            await create_addon_operations_requests(
-                self._session,
-                user_id=buyer.id,
-                buyer_name=buyer_name,
-                buyer_email=buyer_email,
-                buyer_phone=buyer_phone,
-                addon_services_csv=item.addon_services,
-            )
-            return {
-                "type": "TECHNOLOGY",
-                "purchaseId": str(purchase.id) if purchase is not None else None,
-                "softwareId": str(item.product_id),
-                "githubLink": software.github_link or "",
-            }
-
-        # ------------------------------------------------------------------ #
         # TechnologyServiceEntity path — provider-powered catalogue services. #
-        # Only services with a confirmed provider_product_key are processed #
-        # here; everything else falls through with the CoBrotherRequest     #
-        # created above (manual fulfillment path).                           #
         # ------------------------------------------------------------------ #
         provider_product_key = None
         provider_service_slug = None

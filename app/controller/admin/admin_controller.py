@@ -32,6 +32,7 @@ from app.service.admin.admin_service import (
     admin_mark_domain_unverified,
     admin_mark_technology_verified,
     admin_mark_technology_unverified,
+    admin_mark_technology_rejected,
     get_admin_dashboard,
     get_all_cobrothers,
     get_all_cobrother_requests_admin,
@@ -222,6 +223,18 @@ async def admin_mark_technology_unverified_endpoint(
     _admin: AppUser = Depends(require_role(["ADMIN"])),
 ):
     result = admin_mark_technology_unverified(db, software_id)
+    if not result.get("success"):
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content=result)
+    return result
+
+
+@router.post("/softwares/{software_id}/mark-rejected")
+async def admin_mark_technology_rejected_endpoint(
+    software_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _admin: AppUser = Depends(require_role(["ADMIN"])),
+):
+    result = admin_mark_technology_rejected(db, software_id)
     if not result.get("success"):
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content=result)
     return result

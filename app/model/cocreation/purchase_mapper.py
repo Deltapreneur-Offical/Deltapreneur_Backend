@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from app.entity.cocreation.software_purchase_entity import SoftwarePurchase
 from app.model.cocreation.software_mapper import build_software_response
-from app.utils.cocreation_enums import SoftwarePurchaseCompletionStatus
+from app.utils.cocreation_enums import (
+    SoftwarePaymentStatus,
+    SoftwarePurchaseCompletionStatus,
+    TechnologyType,
+)
 
 
 def build_purchase_response(purchase: SoftwarePurchase) -> dict:
@@ -13,10 +17,27 @@ def build_purchase_response(purchase: SoftwarePurchase) -> dict:
     if software is not None:
         sw = build_software_response(software, is_owner=False, hide_github_from_public=True)
         sw_dict = sw.model_dump(mode="json", by_alias=True)
-        if purchase.completion_status == SoftwarePurchaseCompletionStatus.CONFIRMED:
-            sw_dict["githubLink"] = software.github_link
+        if (
+            purchase.completion_status == SoftwarePurchaseCompletionStatus.CONFIRMED
+            and purchase.payment_status == SoftwarePaymentStatus.COMPLETED
+        ):
+            # Hardware never delivers a GitHub repository URL to the buyer.
+            if software.technology_type == TechnologyType.HARDWARE:
+                sw_dict["githubLink"] = None
+            else:
+                sw_dict["githubLink"] = (
+                    purchase.delivered_github_link or software.github_link
+                )
+            sw_dict["documentationUrls"] = (
+                purchase.delivered_documentation_urls or software.documentation_urls
+            )
+            sw_dict["downloadUrls"] = (
+                purchase.delivered_download_urls or software.download_urls
+            )
         else:
             sw_dict["githubLink"] = None
+            sw_dict["documentationUrls"] = None
+            sw_dict["downloadUrls"] = None
         sw_payload = sw_dict
 
     return {

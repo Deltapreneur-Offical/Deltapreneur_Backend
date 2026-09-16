@@ -10,7 +10,7 @@ from app.integrations.s3.supabase_storage import resolve_media_url
 from app.model.cocreation.cocreation_response import SoftwareResponse, TechnologyPricingPlanResponse
 from app.model.user.public_user import to_public_user
 from app.model.venture.venture_response import AgreementResponse
-from app.utils.cocreation_enums import SoftwarePurchaseCompletionStatus
+from app.utils.cocreation_enums import SoftwarePurchaseCompletionStatus, TechnologyType
 
 
 def build_software_response(
@@ -35,9 +35,32 @@ def build_software_response(
     if hide_github_from_public:
         show_github = is_owner or (
             viewer_purchase is not None
-            and viewer_purchase.completion_status
+            and getattr(viewer_purchase, "completion_status", None)
             == SoftwarePurchaseCompletionStatus.CONFIRMED
+            and getattr(
+                getattr(viewer_purchase, "payment_status", None),
+                "value",
+                "COMPLETED",
+            )
+            == "COMPLETED"
         )
+
+    github_link = software.github_link
+    documentation_urls = software.documentation_urls
+    download_urls = software.download_urls
+    if (
+        viewer_purchase is not None
+        and not is_owner
+        and getattr(viewer_purchase, "delivered_github_link", None)
+    ):
+        github_link = viewer_purchase.delivered_github_link
+        documentation_urls = viewer_purchase.delivered_documentation_urls
+        download_urls = viewer_purchase.delivered_download_urls
+
+    # Hardware buyers never receive a GitHub repository URL (owners still can).
+    expose_github = show_github and (
+        is_owner or software.technology_type != TechnologyType.HARDWARE
+    )
 
     seller_price = software.seller_price
     commission_amount = None
@@ -66,9 +89,9 @@ def build_software_response(
         video_link=software.video_link,
         what_it_does=software.what_it_does,
         how_it_helps=software.how_it_helps,
-        github_link=software.github_link if show_github else None,
-        documentation_urls=software.documentation_urls if show_github else None,
-        download_urls=software.download_urls if show_github else None,
+        github_link=github_link if expose_github else None,
+        documentation_urls=documentation_urls if show_github else None,
+        download_urls=download_urls if show_github else None,
         image_url=resolve_media_url(software.image_url),
         logo_url=resolve_media_url(software.image_url),
         logo=resolve_media_url(software.image_url),
@@ -92,6 +115,7 @@ def build_software_response(
         featured=software.featured,
         verified=bool(software.verified),
         verified_at=software.verified_at,
+        rejected=bool(getattr(software, "rejected", False)),
         created_at=software.created_at,
         updated_at=software.updated_at,
         agreement=agreement,

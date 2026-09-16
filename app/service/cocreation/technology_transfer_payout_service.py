@@ -7,12 +7,14 @@ from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.exceptions import AppException
 from app.entity.payout.seller_payout_entity import SellerPayout
 from app.entity.user.app_user import AppUser
 from app.repository.software_purchase_repository import SoftwarePurchaseRepository
 from app.repository.seller_payout_profile_repository import SellerPayoutProfileRepository
 from app.service.payout.seller_payout_profile_service import SellerPayoutProfileService
+from app.utils.cocreation_enums import SoftwarePaymentStatus
 from app.utils.transfer_enums import SellerPayoutStatus
 
 
@@ -31,12 +33,30 @@ class TechnologyTransferPayoutService:
             )
         return profile
 
+    async def _assert_payout_eligible(self, tx) -> None:
+        if tx.seller_paid_at:
+            raise AppException("Payout is already completed.", status_code=400)
+        if tx.payment_status == SoftwarePaymentStatus.REFUNDED or tx.refund_completed_at:
+            raise AppException("Cannot pay out a refunded purchase.", status_code=400)
+        if tx.payment_status == SoftwarePaymentStatus.CANCELLED:
+            raise AppException("Cannot pay out a cancelled purchase.", status_code=400)
+        if tx.payment_status == SoftwarePaymentStatus.FAILED:
+            raise AppException("Cannot pay out a failed purchase.", status_code=400)
+        if tx.payment_status != SoftwarePaymentStatus.COMPLETED:
+            raise AppException("Payment must be completed before payout.", status_code=400)
+        software = tx.software
+        if software is None:
+            raise AppException("Software listing not found for this purchase.", status_code=400)
+        if getattr(software, "rejected", False):
+            raise AppException("Cannot pay out a rejected listing.", status_code=400)
+        if settings.REQUIRE_TECHNOLOGY_VERIFICATION_BEFORE_PURCHASE and not software.verified:
+            raise AppException("Cannot pay out an unverified listing.", status_code=400)
+
     async def approve_payout(self, tx_id: uuid.UUID, *, admin: AppUser) -> dict:
         tx = await self._repo.get_by_id_for_update(tx_id)
         if tx is None:
             raise AppException("Software purchase transaction not found.", status_code=404)
-        if tx.seller_paid_at:
-            raise AppException("Payout is already completed.", status_code=400)
+        await self._assert_payout_eligible(tx)
             
         seller_id = tx.software.listed_by_user_id
         if seller_id is None:
@@ -64,6 +84,7 @@ class TechnologyTransferPayoutService:
         tx = await self._repo.get_by_id_for_update(tx_id)
         if tx is None:
             raise AppException("Software purchase transaction not found.", status_code=404)
+        await self._assert_payout_eligible(tx)
         if tx.payout_approved_at is None:
             raise AppException("Payout must be approved before release.", status_code=400)
         if tx.seller_paid_at:

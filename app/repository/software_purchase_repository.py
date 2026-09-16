@@ -52,6 +52,31 @@ class SoftwarePurchaseRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def list_by_razorpay_order_id_for_update(
+        self,
+        order_id: str,
+    ) -> Sequence[SoftwarePurchase]:
+        stmt = (
+            select(SoftwarePurchase)
+            .where(SoftwarePurchase.razorpay_order_id == order_id)
+            .options(selectinload(SoftwarePurchase.software))
+            .with_for_update()
+        )
+        result = await self._session.execute(stmt)
+        return result.scalars().all()
+
+    async def get_by_order_and_software(
+        self,
+        order_id: str,
+        software_id: uuid.UUID,
+    ) -> Optional[SoftwarePurchase]:
+        stmt = select(SoftwarePurchase).where(
+            SoftwarePurchase.razorpay_order_id == order_id,
+            SoftwarePurchase.software_id == software_id,
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def get_by_razorpay_payment_id(self, payment_id: str) -> Optional[SoftwarePurchase]:
         stmt = select(SoftwarePurchase).where(SoftwarePurchase.razorpay_payment_id == payment_id)
         result = await self._session.execute(stmt)
@@ -79,15 +104,24 @@ class SoftwarePurchaseRepository:
         self,
         buyer_id: uuid.UUID,
     ) -> Sequence[SoftwarePurchase]:
+        return await self.list_by_buyer(buyer_id, completed_only=True)
+
+    async def list_by_buyer(
+        self,
+        buyer_id: uuid.UUID,
+        *,
+        completed_only: bool = False,
+    ) -> Sequence[SoftwarePurchase]:
         stmt = (
             select(SoftwarePurchase)
-            .where(
-                SoftwarePurchase.buyer_id == buyer_id,
+            .where(SoftwarePurchase.buyer_id == buyer_id)
+            .options(selectinload(SoftwarePurchase.software))
+            .order_by(SoftwarePurchase.created_at.desc())
+        )
+        if completed_only:
+            stmt = stmt.where(
                 SoftwarePurchase.payment_status == SoftwarePaymentStatus.COMPLETED,
             )
-            .options(selectinload(SoftwarePurchase.software))
-            .order_by(SoftwarePurchase.sold_at.desc())
-        )
         result = await self._session.execute(stmt)
         return result.scalars().all()
 
@@ -159,7 +193,6 @@ class SoftwarePurchaseRepository:
         from app.entity.cocreation.software_entity import Software
         stmt = (
             select(SoftwarePurchase)
-            .where(SoftwarePurchase.payment_status == SoftwarePaymentStatus.COMPLETED)
             .options(
                 selectinload(SoftwarePurchase.software),
                 selectinload(SoftwarePurchase.buyer),
