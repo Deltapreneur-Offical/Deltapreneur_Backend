@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -17,9 +18,17 @@ from app.entity.cobranding.domain_listing_entity import DomainListing
 from app.entity.user.app_user import AppUser
 from app.repository.domain_listing_repository import DomainListingRepository
 from app.service.admin.admin_serializers import serialize_domain_enquiry
+from app.service.domain.domain_enquiry_pipeline import (
+    LISTING_PIPELINE_FULL_NAME,
+    LISTING_PIPELINE_MESSAGE,
+    is_listing_pipeline_placeholder,
+)
 from app.utils.marketplace_enums import DomainEnquiryStatus, DomainListingStatus
 
 logger = logging.getLogger(__name__)
+
+# Strong references to in-flight buyer emails; asyncio only holds weak ones.
+_PENDING_EMAILS: set[asyncio.Task] = set()
 
 # Strictly greater than ₹5L (align with FE isPremiumDomain).
 PREMIUM_MARKETPLACE_MIN_PRICE_INR = 500_000.0
@@ -68,7 +77,7 @@ _ACTIVE_ENQUIRY_STATUSES = (
     DomainEnquiryStatus.ACCEPTED.value,
 )
 
-_LISTING_PIPELINE_MESSAGE = "Listed premium domain (Pending buyer enquiry)"
+_LISTING_PIPELINE_MESSAGE = LISTING_PIPELINE_MESSAGE
 
 
 def is_premium_marketplace_listing(listing: DomainListing) -> bool:
@@ -164,7 +173,7 @@ class DomainEnquiryService:
         row = DomainEnquiry(
             domain_listing_id=listing.id,
             enquirer_user_id=listing.listed_by_user_id,
-            full_name="No buyer enquiry yet",
+            full_name=LISTING_PIPELINE_FULL_NAME,
             email="-",
             phone="-",
             message=_LISTING_PIPELINE_MESSAGE,
@@ -237,7 +246,7 @@ class DomainEnquiryService:
             self._not_deleted_filter(),
             DomainEnquiry.status.in_(_ACTIVE_ENQUIRY_STATUSES),
             DomainEnquiry.message == _LISTING_PIPELINE_MESSAGE,
-            DomainEnquiry.full_name == "No buyer enquiry yet",
+            DomainEnquiry.full_name == LISTING_PIPELINE_FULL_NAME,
         )
         pipeline_placeholder = (
             await self._session.execute(pipeline_stmt)
@@ -268,10 +277,7 @@ class DomainEnquiryService:
         existing = (await self._session.execute(stmt)).scalar_one_or_none()
         if existing is not None:
             was_reopened = bool(existing.completed_at or existing.declined_at)
-            is_pipeline_placeholder = (
-                existing.message == _LISTING_PIPELINE_MESSAGE
-                and existing.full_name == "No buyer enquiry yet"
-            )
+            is_pipeline_placeholder = is_listing_pipeline_placeholder(existing)
             if was_reopened or is_pipeline_placeholder:
                 now = datetime.now(timezone.utc)
                 existing.is_deleted = True
@@ -510,20 +516,29 @@ class DomainEnquiryService:
                 to_email = buyer_user.email.strip() or to_email
 
         if to_email:
-            try:
-                await MailService.send_premium_marketplace_buyer_update_email(
-                    to_email=to_email,
-                    buyer_name=buyer_name,
-                    domain_fqdn=fqdn,
-                    status_label=status_label,
-                    admin_message=admin_message,
-                    enquiry_id=str(enquiry.id),
-                )
-            except Exception:
-                logger.exception(
-                    "premium_marketplace.buyer_update_email.failed enquiry=%s",
-                    enquiry.id,
-                )
+            # Sent off the request path: an unreachable SMTP host costs
+            # MAIL_TIMEOUT_SECONDS, which otherwise stalls the admin's response.
+            enquiry_id = str(enquiry.id)
+
+            async def _deliver() -> None:
+                try:
+                    await MailService.send_premium_marketplace_buyer_update_email(
+                        to_email=to_email,
+                        buyer_name=buyer_name,
+                        domain_fqdn=fqdn,
+                        status_label=status_label,
+                        admin_message=admin_message,
+                        enquiry_id=enquiry_id,
+                    )
+                except Exception:
+                    logger.exception(
+                        "premium_marketplace.buyer_update_email.failed enquiry=%s",
+                        enquiry_id,
+                    )
+
+            task = asyncio.create_task(_deliver())
+            _PENDING_EMAILS.add(task)
+            task.add_done_callback(_PENDING_EMAILS.discard)
 
         if enquiry.enquirer_user_id:
             db = SessionLocal()
@@ -609,12 +624,13 @@ class DomainEnquiryService:
                 enquiries.append({
                     "id": str(listing.id),
                     "domainListingId": str(listing.id),
-                    "fullName": "No buyer enquiry yet",
+                    "fullName": LISTING_PIPELINE_FULL_NAME,
                     "email": "-",
                     "phone": "-",
-                    "message": "Listed premium domain (Pending buyer enquiry)",
+                    "message": LISTING_PIPELINE_MESSAGE,
                     "status": status,
                     "isVirtual": True,
+                    "isPlaceholder": True,
                     "createdAt": listing.created_at.isoformat() if listing.created_at else None,
                     "domain": {
                         "id": str(listing.id),
