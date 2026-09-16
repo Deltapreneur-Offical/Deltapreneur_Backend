@@ -14,4 +14,4 @@ def test_alembic_can_locate_render_techmkt001_stamp():
     rev = script.get_revision("techmkt001")
     assert rev is not None
     assert rev.revision == "techmkt001"
-    assert script.get_current_head() == "techmkt001"
+    assert script.get_current_head() == "techmkt002"

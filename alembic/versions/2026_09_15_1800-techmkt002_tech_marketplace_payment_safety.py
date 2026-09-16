@@ -1,8 +1,11 @@
 """Technology marketplace payment, delivery snapshot, and payout safety.
 
-Revision ID: techmkt001
-Revises: perf_listing_indexes_001
-Create Date: 2026-09-15 12:00:00
+Revision ID: techmkt002
+Revises: techmkt001
+Create Date: 2026-09-15 18:00:00
+
+``techmkt001`` is reserved as the Render legacy locator no-op. Real marketplace
+schema changes live here as ``techmkt002``.
 """
 
 from typing import Sequence, Union
@@ -10,10 +13,29 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
-revision: str = "techmkt001"
-down_revision: Union[str, Sequence[str], None] = "perf_listing_indexes_001"
+revision: str = "techmkt002"
+down_revision: Union[str, Sequence[str], None] = "techmkt001"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
+
+
+def _add_column_if_missing(table: str, column: sa.Column) -> None:
+    bind = op.get_bind()
+    exists = bind.execute(
+        sa.text(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_name = :table
+              AND column_name = :column
+            LIMIT 1
+            """
+        ),
+        {"table": table, "column": column.name},
+    ).scalar()
+    if exists:
+        return
+    op.add_column(table, column)
 
 
 def upgrade() -> None:
@@ -23,31 +45,31 @@ def upgrade() -> None:
     op.execute(
         "ALTER TYPE software_payment_status_enum ADD VALUE IF NOT EXISTS 'REFUNDED'"
     )
-    op.add_column(
+    _add_column_if_missing(
         "software_listings",
         sa.Column("rejected", sa.Boolean(), nullable=False, server_default=sa.text("false")),
     )
-    op.add_column(
+    _add_column_if_missing(
         "software_purchases",
         sa.Column("razorpay_refund_id", sa.String(length=128), nullable=True),
     )
-    op.add_column(
+    _add_column_if_missing(
         "software_purchases",
         sa.Column("refund_completed_at", sa.DateTime(timezone=True), nullable=True),
     )
-    op.add_column(
+    _add_column_if_missing(
         "software_purchases",
         sa.Column("delivered_github_link", sa.String(length=512), nullable=True),
     )
-    op.add_column(
+    _add_column_if_missing(
         "software_purchases",
         sa.Column("delivered_documentation_urls", sa.Text(), nullable=True),
     )
-    op.add_column(
+    _add_column_if_missing(
         "software_purchases",
         sa.Column("delivered_download_urls", sa.Text(), nullable=True),
     )
-    op.add_column(
+    _add_column_if_missing(
         "software_purchases",
         sa.Column("delivered_at", sa.DateTime(timezone=True), nullable=True),
     )
