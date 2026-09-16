@@ -185,7 +185,7 @@ class CocreationService:
         from sqlalchemy import select as sa_select
 
         purchase_repo = SoftwarePurchaseRepository(self._session)
-        rows = await purchase_repo.list_completed_by_buyer(user.id)
+        rows = await purchase_repo.list_by_buyer(user.id)
         result = [build_purchase_response(p) for p in rows]
 
         stmt = (
@@ -478,6 +478,14 @@ class CocreationService:
                         is_active=True,
                     )
                     software.pricing_plans.append(plan)
+
+        if "github_link" in data or "documentation_urls" in data or "download_urls" in data:
+            purchase_repo = SoftwarePurchaseRepository(self._session)
+            sold = await purchase_repo.count_completed_for_software(software.id)
+            if sold > 0:
+                data.pop("github_link", None)
+                data.pop("documentation_urls", None)
+                data.pop("download_urls", None)
 
         for field, value in data.items():
             if field in {"agreement"}:

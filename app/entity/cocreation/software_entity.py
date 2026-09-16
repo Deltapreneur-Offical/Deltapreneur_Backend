@@ -92,6 +92,7 @@ class Software(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     verified_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    rejected: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     agreement_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),

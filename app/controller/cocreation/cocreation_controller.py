@@ -293,6 +293,15 @@ async def software_purchase_failure(
     return await service.handle_failure(software_id, buyer=current_user)
 
 
+@router.post("/purchase/{purchase_id}/cancel")
+async def cancel_software_purchase(
+    purchase_id: uuid.UUID,
+    service: CocreationPaymentService = Depends(get_payment_service),
+    current_user: AppUser = Depends(get_current_user),
+) -> dict:
+    return await service.cancel_unpaid_purchase(purchase_id, buyer=current_user)
+
+
 @router.get("/{software_id}/analytics")
 async def get_software_analytics(
     software_id: uuid.UUID,

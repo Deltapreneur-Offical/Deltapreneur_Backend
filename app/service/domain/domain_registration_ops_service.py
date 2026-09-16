@@ -80,32 +80,49 @@ class DomainRegistrationOpsService:
         )
 
         if event == "payment.captured" and order_id:
+            from app.service.cocreation.cocreation_payment_service import (
+                CocreationPaymentService,
+            )
+
             outcome = await self._registration.complete_payment_from_webhook(
                 order_id, payment_id,
             )
-            cart_outcome: dict = {"processed": False, "itemsFound": 0}
-            order_notes = entity.get("notes") if isinstance(entity.get("notes"), dict) else {}
-            if not order_notes:
-                try:
-                    fetched_order = rzp.fetch_order(order_id)
-                    order_notes = fetched_order.get("notes") or {}
-                except Exception:
-                    logger.info("razorpay.webhook.cart_notes_unavailable order_id=%s", order_id)
-                    order_notes = {}
-            if str(order_notes.get("cartCheckout") or "").lower() == "true":
-                buyer_id = str(order_notes.get("buyerId") or order_notes.get("buyer_id") or "").strip()
-                cart_outcome = await CartCheckoutService(self._session).complete_technology_payment_from_webhook(
+            cart_outcome = {"processed": False, "itemsFound": 0}
+            try:
+                order = rzp.fetch_order(order_id)
+            except Exception:
+                logger.exception(
+                    "razorpay.webhook.fetch_order_failed order_id=%s payment_id=%s",
+                    order_id,
+                    payment_id,
+                )
+                order = {}
+            notes = (order or {}).get("notes") or {}
+            if str(notes.get("cartCheckout") or "").lower() == "true":
+                cart_outcome = await CartCheckoutService(
+                    self._session
+                ).complete_technology_payment_from_webhook(
                     razorpay_order_id=order_id,
                     razorpay_payment_id=payment_id,
-                    buyer_id=buyer_id,
+                    buyer_id=str(notes.get("buyerId") or ""),
                 )
+
+            tech_outcome = {"purchasesFound": 0, "purchasesCompleted": 0}
+            if not cart_outcome.get("itemsFound"):
+                tech_outcome = await CocreationPaymentService(
+                    self._session
+                ).complete_from_webhook(order_id, payment_id)
             orders_found = int(outcome.get("ordersFound") or 0)
+            tech_found = int(tech_outcome.get("purchasesFound") or 0)
+            cart_found = int(cart_outcome.get("itemsFound") or 0)
             registration_attempted = bool(outcome.get("registrationAttempted"))
             registration_successful = bool(outcome.get("registrationSuccessful"))
             needs_attention = (
-                bool(outcome.get("needsAttention"))
-                or bool(cart_outcome.get("needsAttention"))
-                or (orders_found == 0 and int(cart_outcome.get("itemsFound") or 0) == 0)
+                orders_found == 0 and tech_found == 0 and cart_found == 0
+            ) or (
+                orders_found > 0 and bool(outcome.get("needsAttention"))
+            ) or (
+                cart_found > 0 and bool(cart_outcome.get("needsAttention"))
             )
 
             if orders_found == 0:
@@ -142,9 +159,15 @@ class DomainRegistrationOpsService:
                 "needsAttention": needs_attention,
                 "skipReason": outcome.get("skipReason"),
                 "results": outcome.get("results") or [],
+                "technologyPurchasesFound": tech_found,
+                "technologyPurchasesCompleted": tech_outcome.get("purchasesCompleted"),
             }
 
         if event == "payment.failed" and order_id:
+            from app.service.cocreation.cocreation_payment_service import (
+                CocreationPaymentService,
+            )
+
             orders = await self._orders.list_by_razorpay_order_id(order_id)
             updated_count = 0
             for order in orders:
@@ -168,13 +191,17 @@ class DomainRegistrationOpsService:
                     )
             if updated_count:
                 await self._session.commit()
+            tech_updated = await CocreationPaymentService(
+                self._session
+            ).mark_failed_from_webhook(order_id)
             logger.info(
                 "razorpay.webhook.payment_failed order_id=%s payment_id=%s "
-                "ordersFound=%s ordersUpdated=%s",
+                "ordersFound=%s ordersUpdated=%s technologyUpdated=%s",
                 order_id,
                 payment_id,
                 len(orders),
                 updated_count,
+                tech_updated,
             )
             return {
                 "processed": True,
@@ -183,6 +210,7 @@ class DomainRegistrationOpsService:
                 "registrationAttempted": False,
                 "registrationSuccessful": False,
                 "ordersUpdated": updated_count,
+                "technologyUpdated": tech_updated,
             }
 
         if event == "refund.processed":
@@ -197,10 +225,20 @@ class DomainRegistrationOpsService:
                 await self._orders.save(order)
             if orders:
                 await self._session.commit()
+            tech_refunded = 0
+            if order_id:
+                from app.service.cocreation.cocreation_payment_service import (
+                    CocreationPaymentService,
+                )
+
+                tech_refunded = await CocreationPaymentService(
+                    self._session
+                ).mark_refunded_from_webhook(order_id, entity.get("id"))
             logger.info(
-                "razorpay.webhook.refund_processed order_id=%s ordersUpdated=%s",
+                "razorpay.webhook.refund_processed order_id=%s ordersUpdated=%s technologyUpdated=%s",
                 order_id,
                 len(orders),
+                tech_refunded,
             )
             return {
                 "processed": True,
@@ -209,6 +247,7 @@ class DomainRegistrationOpsService:
                 "registrationAttempted": False,
                 "registrationSuccessful": False,
                 "ordersUpdated": len(orders),
+                "technologyUpdated": tech_refunded,
             }
 
         logger.info("razorpay.webhook.ignored_event event=%s", event)

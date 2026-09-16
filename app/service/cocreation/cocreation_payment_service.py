@@ -23,6 +23,7 @@ from app.repository.software_purchase_repository import SoftwarePurchaseReposito
 from app.repository.software_repository import SoftwareRepository
 from app.service.auth.mail_service import MailService
 from app.utils.addon_services import parse_addon_services, resolve_buyer_phone
+from app.service.cocreation.technology_verification_guard import assert_technology_purchasable
 from app.utils.cocreation_enums import (
     SoftwarePaymentStatus,
     SoftwarePurchaseCompletionStatus,
@@ -34,6 +35,44 @@ from app.utils.cocreation_enums import (
 from app.utils.marketplace_enums import CoBrotherRequestStatus, CoBrotherRequestType
 from app.service.currency.exchange_rate_service import convert_inr
 from app.service.platform.listing_pricing_service import ListingPricingService
+
+
+def snapshot_delivery(purchase: SoftwarePurchase, software) -> None:
+    if software is None or getattr(purchase, "delivered_at", None) is not None:
+        return
+    if not hasattr(purchase, "delivered_github_link"):
+        return
+    purchase.delivered_github_link = software.github_link
+    purchase.delivered_documentation_urls = getattr(software, "documentation_urls", None)
+    purchase.delivered_download_urls = getattr(software, "download_urls", None)
+    purchase.delivered_at = datetime.now(timezone.utc)
+
+
+def buyer_delivery_github(purchase: SoftwarePurchase, software) -> str:
+    """Return the buyer-facing GitHub URL for Software deliveries only.
+
+    Hardware listings never expose a repository URL to the buyer, even if one
+    is stored on the listing or purchase snapshot.
+    """
+    if software is not None and getattr(software, "technology_type", None) == TechnologyType.HARDWARE:
+        return ""
+    snap = getattr(purchase, "delivered_github_link", None)
+    if snap:
+        return snap
+    return (software.github_link if software else "") or ""
+
+
+def should_mark_listing_sold(software, purchase: SoftwarePurchase) -> bool:
+    if software is None:
+        return False
+    if software.purchase_type == SoftwarePurchaseType.SUBSCRIPTION:
+        return False
+    if (
+        purchase.selected_plan
+        and purchase.selected_plan != TechnologyPricingPlanDuration.ONE_TIME
+    ):
+        return False
+    return True
 
 
 class CocreationPaymentService:
@@ -67,11 +106,7 @@ class CocreationPaymentService:
             raise AppException("Software listing not found.", status_code=404)
         if software.listed_by_user_id == buyer.id:
             raise AppException("You cannot buy your own listing.", status_code=400)
-        if settings.REQUIRE_TECHNOLOGY_VERIFICATION_BEFORE_PURCHASE and not software.verified:
-            raise AppException(
-                "This technology listing is not verified yet.",
-                status_code=400,
-            )
+        assert_technology_purchasable(software)
         if software.software_status != SoftwareStatus.AVAILABLE:
             raise AppException("Software is not available.", status_code=400)
         if software.purchase_type == SoftwarePurchaseType.AUCTION:
@@ -208,6 +243,81 @@ class CocreationPaymentService:
             "keyId": rzp.get_key_id(),
         }
 
+    async def create_pending_from_cart(
+        self,
+        *,
+        software,
+        buyer: AppUser,
+        razorpay_order_id: str,
+        buyer_full_name: str,
+        buyer_email: str,
+        buyer_phone: str,
+        selected_plan: str | None,
+        addon_services: str | None,
+        co_brother_opt_in: bool,
+    ) -> SoftwarePurchase:
+        assert_technology_purchasable(software)
+        existing = await self._purchase_repo.get_by_order_and_software(
+            razorpay_order_id, software.id
+        )
+        if existing is not None:
+            return existing
+
+        plan_enum = None
+        base_price = float(software.price or 0)
+        if selected_plan:
+            key_mapping = {
+                "1_MONTH": "ONE_MONTH",
+                "3_MONTHS": "THREE_MONTHS",
+                "6_MONTHS": "SIX_MONTHS",
+                "12_MONTHS": "TWELVE_MONTHS",
+            }
+            mapped = key_mapping.get(selected_plan, selected_plan)
+            try:
+                plan_enum = TechnologyPricingPlanDuration(mapped)
+            except ValueError:
+                plan_enum = None
+            if software.pricing_plans and plan_enum:
+                plan = next(
+                    (
+                        p
+                        for p in software.pricing_plans
+                        if p.plan_duration == plan_enum and p.is_active
+                    ),
+                    None,
+                )
+                if plan:
+                    base_price = float(plan.price)
+        is_software = software.technology_type == TechnologyType.SOFTWARE
+        is_subscription = (
+            plan_enum is not None and plan_enum != TechnologyPricingPlanDuration.ONE_TIME
+        )
+        if is_software and is_subscription:
+            platform_fee = base_price
+            seller_payout = 0.0
+        else:
+            seller_payout = (
+                float(software.seller_price) if software.seller_price is not None else 0.0
+            )
+            platform_fee = round(base_price - seller_payout, 2)
+
+        purchase = SoftwarePurchase(
+            software_id=software.id,
+            buyer_id=buyer.id,
+            buyer_full_name=buyer_full_name,
+            buyer_email=buyer_email,
+            buyer_phone=buyer_phone,
+            purchase_addon_services=addon_services or None,
+            razorpay_order_id=razorpay_order_id,
+            payment_status=SoftwarePaymentStatus.CREATED,
+            co_brother_opt_in=co_brother_opt_in,
+            selected_plan=plan_enum,
+            gross_amount_inr=base_price,
+            platform_fee_inr=platform_fee,
+            seller_payout_inr=seller_payout,
+        )
+        return await self._purchase_repo.create(purchase)
+
     async def verify_payment(
         self,
         software_id: uuid.UUID,
@@ -217,85 +327,159 @@ class CocreationPaymentService:
         razorpay_signature: str,
         buyer: AppUser,
     ) -> dict[str, Any]:
-        purchase = await self._purchase_repo.get_by_razorpay_order_id(razorpay_order_id)
-        if purchase is None or purchase.software_id != software_id:
+        purchases = await self._purchase_repo.list_by_razorpay_order_id_for_update(
+            razorpay_order_id
+        )
+        purchase = next((p for p in purchases if p.software_id == software_id), None)
+        if purchase is None:
             raise AppException("Purchase not found.", status_code=404)
         if purchase.buyer_id != buyer.id:
             raise AppException(
                 "This purchase order belongs to another user.",
                 status_code=403,
             )
-
-        from app.service.platform.track_record_service import (
-            TrackRecordService,
-            TrackRecordCategory,
-            PaymentStatus,
-            FulfillmentStatus,
-            OverallStatus,
-        )
-        track_service = TrackRecordService(self._session)
+        if purchase.payment_status == SoftwarePaymentStatus.REFUNDED:
+            raise AppException("This purchase has been refunded.", status_code=400)
 
         if not rzp.verify_payment_signature(
             razorpay_order_id, razorpay_payment_id, razorpay_signature,
         ):
-            purchase.payment_status = SoftwarePaymentStatus.FAILED
-            await self._purchase_repo.save(purchase)
-
-            software = await self._software_repo.get_by_id(software_id)
-            await track_service.record_paid_attempt(
-                internal_order_id=f"TRK-TECH-{razorpay_order_id}",
-                category=TrackRecordCategory.TECHNOLOGY_PURCHASE,
-                provider_subcategory="Razorpay",
-                item_name=software.name if software else str(software_id),
-                item_id=str(software_id),
-                buyer_name=purchase.buyer_full_name or (buyer.full_name if buyer else ""),
-                buyer_email=purchase.buyer_email or (buyer.email if buyer else ""),
-                buyer_phone=purchase.buyer_phone or (buyer.mobile_number if buyer else ""),
-                buyer_user_id=buyer.id if buyer else None,
-                amount_charged=float(purchase.gross_amount_inr or 0.0),
-                currency="INR",
-                payment_status=PaymentStatus.FAILED,
-                razorpay_order_id=razorpay_order_id,
-                razorpay_payment_id=razorpay_payment_id,
-                fulfillment_status=FulfillmentStatus.FAILED,
-                overall_status=OverallStatus.FAILED,
-                error_code="VERIFICATION_FAILED",
-                error_message="Razorpay payment signature verification failed",
-                error_source="RAZORPAY",
-            )
-
-            await self._session.commit()
             raise AppException("Verification failed.", status_code=400)
 
+        software = purchase.software or await self._software_repo.get_by_id(software_id)
         if purchase.payment_status == SoftwarePaymentStatus.COMPLETED:
-            software = purchase.software or await self._software_repo.get_by_id(
-                software_id
-            )
-            github_link = ""
-            if (
-                purchase.completion_status
-                == SoftwarePurchaseCompletionStatus.CONFIRMED
-                and software
-            ):
-                github_link = software.github_link or ""
+            snapshot_delivery(purchase, software)
+            await self._purchase_repo.save(purchase)
+            await self._session.commit()
             return {
                 "success": True,
                 "message": "Payment already verified.",
-                "githubLink": github_link,
+                "githubLink": buyer_delivery_github(purchase, software),
                 "purchaseId": str(purchase.id),
                 "completionStatus": purchase.completion_status.value,
             }
 
-        software = await self._software_repo.get_by_id(software_id)
+        await self._finalize_paid_purchase(
+            purchase,
+            software=software,
+            razorpay_payment_id=razorpay_payment_id,
+            buyer=buyer,
+        )
+        await self._session.commit()
+        return {
+            "success": True,
+            "message": "Payment successful",
+            "githubLink": buyer_delivery_github(purchase, software),
+            "purchaseId": str(purchase.id),
+            "completionStatus": SoftwarePurchaseCompletionStatus.CONFIRMED.value,
+        }
+
+    async def complete_from_webhook(
+        self,
+        razorpay_order_id: str,
+        razorpay_payment_id: str,
+    ) -> dict[str, Any]:
+        purchases = await self._purchase_repo.list_by_razorpay_order_id_for_update(
+            razorpay_order_id
+        )
+        completed = 0
+        skipped = 0
+        for purchase in purchases:
+            if purchase.payment_status in (
+                SoftwarePaymentStatus.REFUNDED,
+            ):
+                skipped += 1
+                continue
+            if purchase.payment_status == SoftwarePaymentStatus.COMPLETED:
+                software = purchase.software or await self._software_repo.get_by_id(
+                    purchase.software_id
+                )
+                snapshot_delivery(purchase, software)
+                if not purchase.razorpay_payment_id:
+                    purchase.razorpay_payment_id = razorpay_payment_id
+                await self._purchase_repo.save(purchase)
+                skipped += 1
+                continue
+            software = purchase.software or await self._software_repo.get_by_id(
+                purchase.software_id
+            )
+            await self._finalize_paid_purchase(
+                purchase,
+                software=software,
+                razorpay_payment_id=razorpay_payment_id,
+                buyer=None,
+            )
+            completed += 1
+        if purchases:
+            await self._session.commit()
+        return {
+            "purchasesFound": len(purchases),
+            "purchasesCompleted": completed,
+            "purchasesSkipped": skipped,
+        }
+
+    async def mark_failed_from_webhook(self, razorpay_order_id: str) -> int:
+        purchases = await self._purchase_repo.list_by_razorpay_order_id_for_update(
+            razorpay_order_id
+        )
+        updated = 0
+        for purchase in purchases:
+            if purchase.payment_status != SoftwarePaymentStatus.CREATED:
+                continue
+            purchase.payment_status = SoftwarePaymentStatus.FAILED
+            await self._purchase_repo.save(purchase)
+            updated += 1
+        if updated:
+            await self._session.commit()
+        return updated
+
+    async def mark_refunded_from_webhook(
+        self,
+        razorpay_order_id: str,
+        refund_id: str | None,
+    ) -> int:
+        purchases = await self._purchase_repo.list_by_razorpay_order_id_for_update(
+            razorpay_order_id
+        )
+        updated = 0
+        now = datetime.now(timezone.utc)
+        for purchase in purchases:
+            if purchase.payment_status == SoftwarePaymentStatus.REFUNDED:
+                continue
+            if purchase.seller_paid_at:
+                continue
+            purchase.payment_status = SoftwarePaymentStatus.REFUNDED
+            purchase.razorpay_refund_id = refund_id or purchase.razorpay_refund_id
+            purchase.refund_completed_at = now
+            await self._purchase_repo.save(purchase)
+            await self._restore_listing_if_exclusive(purchase)
+            updated += 1
+        if updated:
+            await self._session.commit()
+        return updated
+
+    async def _finalize_paid_purchase(
+        self,
+        purchase: SoftwarePurchase,
+        *,
+        software,
+        razorpay_payment_id: str,
+        buyer: AppUser | None,
+    ) -> None:
+        if purchase.payment_status == SoftwarePaymentStatus.COMPLETED:
+            snapshot_delivery(purchase, software)
+            return
+
         now = datetime.now(timezone.utc)
         purchase.payment_status = SoftwarePaymentStatus.COMPLETED
         purchase.completion_status = SoftwarePurchaseCompletionStatus.CONFIRMED
         purchase.razorpay_payment_id = razorpay_payment_id
         purchase.sold_at = now
+        snapshot_delivery(purchase, software)
         if purchase.co_brother_opt_in:
             purchase.co_brother_help_paid = True
-            
-        if purchase.selected_plan:
+
+        if purchase.selected_plan and not purchase.expiry_date:
             if purchase.selected_plan == TechnologyPricingPlanDuration.ONE_MONTH:
                 purchase.expiry_date = now + timedelta(days=30)
             elif purchase.selected_plan == TechnologyPricingPlanDuration.THREE_MONTHS:
@@ -305,21 +489,22 @@ class CocreationPaymentService:
             elif purchase.selected_plan == TechnologyPricingPlanDuration.TWELVE_MONTHS:
                 purchase.expiry_date = now + timedelta(days=365)
 
-        if software:
-            # Only mark SOLD if ONE_TIME hardware? Wait, for SaaS we don't mark SOLD, they are multi-purchase.
-            # But earlier it was always marked SOLD. Let's preserve existing behavior.
+        if software and should_mark_listing_sold(software, purchase):
             software.software_status = SoftwareStatus.SOLD
             await self._software_repo.save(software)
 
         await self._purchase_repo.save(purchase)
         await self._create_cobrother_request(purchase, software)
-        
-        # Create Operations requests for selected compliance addons
+
         from app.utils.addon_services import create_addon_operations_requests
-        buyer_phone = purchase.buyer_phone or (buyer.phone_number if buyer else "")
+        buyer_phone = purchase.buyer_phone or (
+            buyer.phone_number if buyer else ""
+        )
         buyer_email = purchase.buyer_email or (buyer.email if buyer else "")
         buyer_name = purchase.buyer_full_name or (
-            " ".join(p for p in (buyer.firstname, buyer.lastname) if p).strip() if buyer else ""
+            " ".join(p for p in (buyer.firstname, buyer.lastname) if p).strip()
+            if buyer
+            else ""
         )
         await create_addon_operations_requests(
             self._session,
@@ -329,36 +514,45 @@ class CocreationPaymentService:
             buyer_phone=buyer_phone,
             addon_services_csv=purchase.purchase_addon_services,
         )
-
         await self._send_receipt_email(purchase, software)
         await self._send_seller_sold_notification_email(purchase, software)
-        await track_service.record_paid_attempt(
-            internal_order_id=f"TRK-TECH-{razorpay_order_id}",
+
+        from app.service.platform.track_record_service import (
+            TrackRecordService,
+            TrackRecordCategory,
+            PaymentStatus,
+            FulfillmentStatus,
+            OverallStatus,
+        )
+        await TrackRecordService(self._session).record_paid_attempt(
+            internal_order_id=f"TRK-TECH-{purchase.razorpay_order_id}",
             category=TrackRecordCategory.TECHNOLOGY_PURCHASE,
             provider_subcategory="Razorpay",
-            item_name=software.name if software else str(software_id),
-            item_id=str(software_id),
-            buyer_name=purchase.buyer_full_name or (buyer.full_name if buyer else ""),
-            buyer_email=purchase.buyer_email or (buyer.email if buyer else ""),
-            buyer_phone=purchase.buyer_phone or (buyer.mobile_number if buyer else ""),
-            buyer_user_id=buyer.id if buyer else None,
+            item_name=software.name if software else str(purchase.software_id),
+            item_id=str(purchase.software_id),
+            buyer_name=purchase.buyer_full_name or "",
+            buyer_email=purchase.buyer_email or "",
+            buyer_phone=purchase.buyer_phone or "",
+            buyer_user_id=purchase.buyer_id,
             amount_charged=float(purchase.gross_amount_inr or 0.0),
             currency="INR",
             payment_status=PaymentStatus.CAPTURED,
-            razorpay_order_id=razorpay_order_id,
+            razorpay_order_id=purchase.razorpay_order_id,
             razorpay_payment_id=razorpay_payment_id,
             fulfillment_status=FulfillmentStatus.PROVISIONED,
             overall_status=OverallStatus.SUCCESS,
         )
-        await self._session.commit()
 
-        return {
-            "success": True,
-            "message": "Payment successful",
-            "githubLink": software.github_link if software else "",
-            "purchaseId": str(purchase.id),
-            "completionStatus": SoftwarePurchaseCompletionStatus.CONFIRMED.value,
-        }
+    async def _restore_listing_if_exclusive(self, purchase: SoftwarePurchase) -> None:
+        software = purchase.software or await self._software_repo.get_by_id(
+            purchase.software_id
+        )
+        if software is None or not should_mark_listing_sold(software, purchase):
+            return
+        remaining = await self._purchase_repo.count_completed_for_software(software.id)
+        if remaining == 0:
+            software.software_status = SoftwareStatus.AVAILABLE
+            await self._software_repo.save(software)
 
     async def complete_auction_winner_purchase(
         self,
@@ -415,6 +609,7 @@ class CocreationPaymentService:
 
         software.software_status = SoftwareStatus.SOLD
         await self._software_repo.save(software)
+        snapshot_delivery(purchase, software)
 
         await self._create_cobrother_request(purchase, software)
         await self._send_receipt_email(purchase, software)
@@ -423,11 +618,103 @@ class CocreationPaymentService:
 
     async def handle_failure(self, software_id: uuid.UUID, *, buyer: AppUser) -> dict:
         purchase = await self._purchase_repo.find_latest_created(software_id, buyer.id)
-        if purchase:
+        if purchase and not purchase.razorpay_payment_id:
             purchase.payment_status = SoftwarePaymentStatus.FAILED
             await self._purchase_repo.save(purchase)
             await self._session.commit()
         return {"success": False}
+
+    async def cancel_unpaid_purchase(
+        self,
+        purchase_id: uuid.UUID,
+        *,
+        buyer: AppUser,
+    ) -> dict[str, Any]:
+        purchase = await self._purchase_repo.get_by_id_for_update(purchase_id)
+        if purchase is None:
+            raise AppException("Purchase not found.", status_code=404)
+        if purchase.buyer_id != buyer.id:
+            raise AppException("You can only cancel your own purchases.", status_code=403)
+        if purchase.payment_status == SoftwarePaymentStatus.CANCELLED:
+            return {"success": True, "message": "Purchase already cancelled."}
+        if purchase.payment_status != SoftwarePaymentStatus.CREATED:
+            raise AppException(
+                "Only unpaid purchases can be cancelled. Request a refund after payment.",
+                status_code=400,
+            )
+        purchase.payment_status = SoftwarePaymentStatus.CANCELLED
+        await self._purchase_repo.save(purchase)
+        await self._session.commit()
+        return {"success": True, "message": "Purchase cancelled."}
+
+    async def admin_refund(
+        self,
+        purchase_id: uuid.UUID,
+        *,
+        admin: AppUser,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        del note
+        purchase = await self._purchase_repo.get_by_id_for_update(purchase_id)
+        if purchase is None:
+            raise AppException("Software purchase transaction not found.", status_code=404)
+        if purchase.payment_status == SoftwarePaymentStatus.REFUNDED:
+            return {
+                "success": True,
+                "alreadyRefunded": True,
+                "refundId": purchase.razorpay_refund_id,
+                "refundAmountInr": float(purchase.gross_amount_inr or 0) * 1.18,
+            }
+        if purchase.seller_paid_at:
+            raise AppException(
+                "Escrow already released (seller paid). Cannot refund.",
+                status_code=400,
+            )
+        if purchase.payment_status != SoftwarePaymentStatus.COMPLETED:
+            raise AppException("Only completed payments can be refunded.", status_code=400)
+        if not purchase.razorpay_payment_id:
+            raise AppException("No payment to refund.", status_code=400)
+
+        amount = round(float(purchase.gross_amount_inr or 0) * 1.18, 2)
+        try:
+            refund = rzp.refund_payment(purchase.razorpay_payment_id, amount)
+        except rzp.AlreadyFullyRefunded as exc:
+            now = datetime.now(timezone.utc)
+            purchase.payment_status = SoftwarePaymentStatus.REFUNDED
+            purchase.razorpay_refund_id = exc.refund_id
+            purchase.refund_completed_at = now
+            await self._purchase_repo.save(purchase)
+            await self._restore_listing_if_exclusive(purchase)
+            await self._session.commit()
+            return {
+                "success": True,
+                "alreadyRefunded": True,
+                "refundId": exc.refund_id,
+                "refundAmountInr": amount,
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("technology.refund.failed purchase=%s", purchase.id)
+            raise AppException(f"Razorpay refund failed: {exc}", status_code=502) from exc
+
+        refund_id = refund.get("id")
+        now = datetime.now(timezone.utc)
+        purchase.payment_status = SoftwarePaymentStatus.REFUNDED
+        purchase.razorpay_refund_id = refund_id
+        purchase.refund_completed_at = now
+        await self._purchase_repo.save(purchase)
+        await self._restore_listing_if_exclusive(purchase)
+        await self._session.commit()
+        logger.info(
+            "technology.refund.completed purchase=%s admin=%s refund_id=%s",
+            purchase.id,
+            admin.id,
+            refund_id,
+        )
+        return {
+            "success": True,
+            "refundId": refund_id,
+            "refundAmountInr": amount,
+        }
 
     async def confirm_purchase(
         self,
@@ -452,7 +739,7 @@ class CocreationPaymentService:
             software = await self._software_repo.get_by_id(purchase.software_id)
 
         if purchase.completion_status == SoftwarePurchaseCompletionStatus.CONFIRMED:
-            github_link = software.github_link if software else ""
+            github_link = buyer_delivery_github(purchase, software)
             return {
                 "success": True,
                 "message": "Purchase already confirmed.",
@@ -462,10 +749,11 @@ class CocreationPaymentService:
             }
 
         purchase.completion_status = SoftwarePurchaseCompletionStatus.CONFIRMED
+        snapshot_delivery(purchase, software)
         await self._purchase_repo.save(purchase)
         await self._session.commit()
 
-        github_link = software.github_link if software else ""
+        github_link = buyer_delivery_github(purchase, software)
         await self._send_confirmed_email(purchase, software, github_link or "")
 
         return {

@@ -67,6 +67,7 @@ def test_single_head_is_techmkt002():
 def test_upgrade_path_includes_marketplace_and_legacy_ids():
     script = _script()
     revisions = [sc.revision for sc in script.walk_revisions()]
+    assert "techmkt002" in revisions
     assert "techmkt001" in revisions
     assert "techmkt002" in revisions
     assert "7f3e7e682dc7" in revisions

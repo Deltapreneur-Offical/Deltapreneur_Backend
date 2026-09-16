@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, Float, ForeignKey, String
+from sqlalchemy import DateTime, Float, ForeignKey, Index, String, text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -17,6 +17,14 @@ from app.utils.transfer_enums import SellerPayoutStatus
 
 class SellerPayout(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "seller_payouts"
+    __table_args__ = (
+        Index(
+            "uq_seller_payouts_software_purchase_id",
+            "software_purchase_id",
+            unique=True,
+            postgresql_where=text("software_purchase_id IS NOT NULL"),
+        ),
+    )
 
     transaction_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),

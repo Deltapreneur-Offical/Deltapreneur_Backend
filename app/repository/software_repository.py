@@ -45,6 +45,7 @@ class SoftwareRepository:
             _alive_software(),
             Software.taken_down.is_(False),
             Software.status.is_(True),
+            Software.rejected.is_(False),
         )
 
     async def count_all_active(self) -> int:

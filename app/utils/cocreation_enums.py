@@ -67,6 +67,8 @@ class SoftwarePaymentStatus(str, Enum):
     CREATED = "CREATED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+    REFUNDED = "REFUNDED"
 
 
 class SoftwarePurchaseCompletionStatus(str, Enum):

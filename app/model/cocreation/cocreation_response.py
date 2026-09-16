@@ -75,6 +75,7 @@ class SoftwareResponse(_ORMModel):
     featured: bool
     verified: bool = False
     verified_at: Optional[datetime] = Field(None, serialization_alias="verifiedAt")
+    rejected: bool = False
     created_at: datetime = Field(serialization_alias="createdAt")
     updated_at: datetime = Field(serialization_alias="updatedAt")
     agreement: Optional[AgreementResponse] = None
