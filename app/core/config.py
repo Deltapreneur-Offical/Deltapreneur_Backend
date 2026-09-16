@@ -159,6 +159,11 @@ class Settings(BaseSettings):
 
     ENVIRONMENT: str = "development"
 
+    # Login revokes a user's other sessions, but only within the same scope.
+    # Local and deployed backends share one database, so an unscoped revoke
+    # signs the user out of the other environment on every login.
+    SESSION_SCOPE: str = ""
+
     CORS_ALLOW_ORIGINS: str = ""
     # Optional: e.g. https://co-brother-frontend(-[a-zA-Z0-9-]+)?\.vercel\.app
     CORS_ALLOW_ORIGIN_REGEX: str = ""
@@ -764,6 +769,14 @@ class Settings(BaseSettings):
 
     def _is_production_env(self) -> bool:
         return (self.ENVIRONMENT or "").strip().lower() == "production"
+
+    def resolved_session_scope(self) -> str:
+        """Identifies which deployment owns a session, so a login here never
+        revokes sessions created by another backend on the shared database."""
+        explicit = (self.SESSION_SCOPE or "").strip().lower()
+        if explicit:
+            return explicit[:255]
+        return ((self.ENVIRONMENT or "development").strip().lower())[:255]
 
     def resolved_cors_origins(self) -> list[str]:
         raw = (self.CORS_ALLOW_ORIGINS or "").strip()

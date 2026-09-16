@@ -97,14 +97,25 @@ class RefreshTokenRepository:
         reason: RevocationReason,
         *,
         commit: bool = True,
+        scope: str | None = None,
     ) -> None:
+        """Revoke a user's live sessions.
+
+        Without ``scope`` every session goes, which is what logout, password
+        change and admin revocation need. Passing ``scope`` limits the revoke
+        to sessions stamped by this deployment, so a login on one backend does
+        not sign the user out of another sharing the same database.
+        """
         now = datetime.now(UTC)
+        filters = [
+            RefreshToken.user_id == user.id,
+            RefreshToken.revoked.is_(False),
+        ]
+        if scope is not None:
+            filters.append(RefreshToken.device_name == scope)
         tokens = (
             db.query(RefreshToken)
-            .filter(
-                RefreshToken.user_id == user.id,
-                RefreshToken.revoked.is_(False),
-            )
+            .filter(*filters)
             .all()
         )
         for token in tokens:
