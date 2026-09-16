@@ -87,17 +87,42 @@ class DomainRegistrationOpsService:
             outcome = await self._registration.complete_payment_from_webhook(
                 order_id, payment_id,
             )
-            tech_outcome = await CocreationPaymentService(
-                self._session
-            ).complete_from_webhook(order_id, payment_id)
+            cart_outcome = {"processed": False, "itemsFound": 0}
+            try:
+                order = rzp.fetch_order(order_id)
+            except Exception:
+                logger.exception(
+                    "razorpay.webhook.fetch_order_failed order_id=%s payment_id=%s",
+                    order_id,
+                    payment_id,
+                )
+                order = {}
+            notes = (order or {}).get("notes") or {}
+            if str(notes.get("cartCheckout") or "").lower() == "true":
+                cart_outcome = await CartCheckoutService(
+                    self._session
+                ).complete_technology_payment_from_webhook(
+                    razorpay_order_id=order_id,
+                    razorpay_payment_id=payment_id,
+                    buyer_id=str(notes.get("buyerId") or ""),
+                )
+
+            tech_outcome = {"purchasesFound": 0, "purchasesCompleted": 0}
+            if not cart_outcome.get("itemsFound"):
+                tech_outcome = await CocreationPaymentService(
+                    self._session
+                ).complete_from_webhook(order_id, payment_id)
             orders_found = int(outcome.get("ordersFound") or 0)
             tech_found = int(tech_outcome.get("purchasesFound") or 0)
+            cart_found = int(cart_outcome.get("itemsFound") or 0)
             registration_attempted = bool(outcome.get("registrationAttempted"))
             registration_successful = bool(outcome.get("registrationSuccessful"))
             needs_attention = (
-                orders_found == 0 and tech_found == 0
+                orders_found == 0 and tech_found == 0 and cart_found == 0
             ) or (
                 orders_found > 0 and bool(outcome.get("needsAttention"))
+            ) or (
+                cart_found > 0 and bool(cart_outcome.get("needsAttention"))
             )
 
             if orders_found == 0:
