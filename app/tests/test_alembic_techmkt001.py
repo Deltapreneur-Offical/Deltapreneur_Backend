@@ -11,8 +11,8 @@ from alembic.script import ScriptDirectory
 TECHMKT001_LOCATOR = (
     "2026_09_15_1710-techmkt001_locate_legacy_alembic_stamp.py"
 )
-TECHMKT002_LOCATOR = (
-    "2026_09_16_1100-techmkt002_locate_render_alembic_stamp.py"
+TECHMKT002_MIGRATION = (
+    "2026_09_15_1800-techmkt002_tech_marketplace_payment_safety.py"
 )
 
 
@@ -40,7 +40,7 @@ def test_only_one_techmkt001_revision_file_exists():
 
 
 def test_only_one_techmkt002_revision_file_exists():
-    assert _revision_files_matching("techmkt002") == [TECHMKT002_LOCATOR]
+    assert _revision_files_matching("techmkt002") == [TECHMKT002_MIGRATION]
 
 
 def test_techmkt001_revision_is_discoverable():
@@ -67,7 +67,6 @@ def test_single_head_is_techmkt002():
 def test_upgrade_path_includes_marketplace_and_legacy_ids():
     script = _script()
     revisions = [sc.revision for sc in script.walk_revisions()]
-    assert "techmkt002" in revisions
     assert "techmkt001" in revisions
     assert "techmkt002" in revisions
     assert "7f3e7e682dc7" in revisions
