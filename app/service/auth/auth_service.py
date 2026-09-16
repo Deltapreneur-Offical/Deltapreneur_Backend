@@ -282,10 +282,14 @@ class AuthService:
     ):
 
         # Intentional single-session-on-login: a new login revokes other devices/tabs.
+        # Scoped to this deployment so a local login does not end the user's
+        # deployed session, or vice versa, when both share one database.
+        session_scope = settings.resolved_session_scope()
         RefreshTokenRepository.revoke_all_user_tokens(
             db,
             user,
             RevocationReason.LOGOUT,
+            scope=session_scope,
         )
 
         # Generate new session
@@ -307,7 +311,8 @@ class AuthService:
             revoked=False,
             ip_address=ip_address,
             user_agent=user_agent,
-            device_name=device_name,
+            # Stamps the owning deployment; see resolved_session_scope().
+            device_name=device_name or session_scope,
             pepper_kid=settings.JWT_REFRESH_TOKEN_PEPPER_KID,
         )
 
