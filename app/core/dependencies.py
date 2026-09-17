@@ -4,7 +4,7 @@ import uuid
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.core.auth_cookies import (
     ACCESS_TOKEN_COOKIE,
@@ -12,7 +12,7 @@ from app.core.auth_cookies import (
     require_csrf_for_cookie_session,
 )
 from app.core.config import settings
-from app.core.database import get_db
+from app.core.database import SessionLocal
 from app.core.security import (
     ACCESS_TOKEN_TYPE,
     access_token_invalidated_by_password_change,
@@ -122,10 +122,31 @@ def _resolve_current_user(
     return user
 
 
+def _load_current_user(token: str) -> AppUser:
+    """Resolve the user on a short-lived session, then detach it.
+
+    Auth used to `Depends(get_db)` for the whole request. Combined with
+    `get_async_db` that pins two pool checkouts until the response finishes,
+    so a logged-in homepage burst exhausts QueuePool (size 10 + overflow 10)
+    and the live API returns 503 with no listings. Close the auth session
+    immediately — column values stay on the detached instance.
+    """
+    db: Session = SessionLocal()
+    try:
+        user = _resolve_current_user(token, db)
+        # Transient test users are not in the session; real rows must be
+        # detached before close() so column values stay readable.
+        if object_session(user) is db:
+            db.expire_on_commit = False
+            db.expunge(user)
+        return user
+    finally:
+        db.close()
+
+
 def get_current_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
-    db: Session = Depends(get_db),
 ) -> AppUser:
     bearer = credentials.credentials if credentials else None
     _enforce_cookie_csrf_if_needed(request, bearer)
@@ -136,7 +157,7 @@ def get_current_user(
             detail="Not authenticated.",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return _resolve_current_user(token, db)
+    return _load_current_user(token)
 
 
 def get_optional_current_user(
@@ -144,7 +165,6 @@ def get_optional_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(
         optional_security
     ),
-    db: Session = Depends(get_db),
 ) -> Optional[AppUser]:
     bearer = credentials.credentials if credentials else None
     token = get_access_token(request, bearer_token=bearer)
@@ -152,7 +172,7 @@ def get_optional_current_user(
         return None
     try:
         _enforce_cookie_csrf_if_needed(request, bearer)
-        return _resolve_current_user(token, db)
+        return _load_current_user(token)
     except HTTPException:
         return None
 

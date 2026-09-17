@@ -156,7 +156,14 @@ async def _scheduler_tick(tick: int) -> int:
             return tick
         try:
             async with AsyncSessionLocal() as work_session:
-                return await _run_locked_scheduler_work(work_session, tick)
+                # Cap work so OpenProvider/HTTP cannot pin pool checkouts.
+                return await asyncio.wait_for(
+                    _run_locked_scheduler_work(work_session, tick),
+                    timeout=25,
+                )
+        except asyncio.TimeoutError:
+            logger.error("background_scheduler.work_timeout tick=%s", tick)
+            return tick
         finally:
             try:
                 await _release_scheduler_lock(lock_session)

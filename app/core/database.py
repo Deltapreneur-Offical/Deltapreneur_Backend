@@ -194,6 +194,9 @@ def _queue_pool_kwargs(pool_size: int, max_overflow: int) -> dict:
         "pool_size": pool_size,
         "max_overflow": max_overflow,
         "pool_timeout": settings.DB_POOL_TIMEOUT_SECONDS,
+        # Prefer recently-used connections so a homepage burst reuses
+        # sockets instead of opening overflow checkouts that then idle-out.
+        "pool_use_lifo": True,
     }
 
 

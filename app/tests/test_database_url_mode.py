@@ -137,6 +137,7 @@ def test_queue_pool_kwargs_include_timeout_and_recycle_without_raising_size() ->
     assert kwargs["pool_recycle"] == settings.DB_POOL_RECYCLE_SECONDS
     assert kwargs["pool_size"] == 3
     assert kwargs["max_overflow"] == 2
+    assert kwargs["pool_use_lifo"] is True
 
 
 def test_live_engines_apply_pool_timeouts_and_recycle() -> None:
