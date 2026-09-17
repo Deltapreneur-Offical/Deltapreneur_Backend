@@ -4,7 +4,13 @@ from unittest.mock import MagicMock
 
 from fastapi import Request
 
+from app.core.database import get_db
+from app.core.dependencies import get_db as get_db_from_dependencies
 from app.core.dependencies import get_optional_current_user
+
+
+def test_get_db_still_exported_from_dependencies() -> None:
+    assert get_db_from_dependencies is get_db
 
 
 def test_optional_auth_skips_db_when_anonymous(monkeypatch) -> None:

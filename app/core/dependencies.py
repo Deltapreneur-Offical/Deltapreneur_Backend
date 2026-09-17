@@ -12,7 +12,7 @@ from app.core.auth_cookies import (
     require_csrf_for_cookie_session,
 )
 from app.core.config import settings
-from app.core.database import SessionLocal
+from app.core.database import SessionLocal, get_db  # noqa: F401 — re-export for existing tests
 from app.core.security import (
     ACCESS_TOKEN_TYPE,
     access_token_invalidated_by_password_change,
