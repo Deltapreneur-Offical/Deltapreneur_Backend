@@ -67,6 +67,56 @@ class CartService:
         self._session = session
         self._repo = CartItemRepository(session)
 
+    @staticmethod
+    def _is_online_domain_registration_meta(meta: dict[str, Any] | None) -> bool:
+        if not isinstance(meta, dict):
+            return False
+        return meta.get("isManagedAcquisition") is not True
+
+    @staticmethod
+    def _registration_provider_total(meta: dict[str, Any] | None) -> float | None:
+        if not CartService._is_online_domain_registration_meta(meta):
+            return None
+        try:
+            period_total = float((meta or {}).get("providerPeriodTotalInr") or 0)
+        except (TypeError, ValueError):
+            period_total = 0.0
+        if period_total > 0:
+            return round(period_total, 2)
+        try:
+            provider_unit = float((meta or {}).get("providerUnitPriceInr") or 0)
+        except (TypeError, ValueError):
+            provider_unit = 0.0
+        if provider_unit <= 0:
+            try:
+                fallback_price = float((meta or {}).get("price") or 0)
+            except (TypeError, ValueError):
+                fallback_price = 0.0
+            return round(fallback_price, 2) if fallback_price > 0 else None
+        try:
+            period = max(1, int((meta or {}).get("period") or 1))
+        except (TypeError, ValueError):
+            period = 1
+        return round(provider_unit * period, 2)
+
+    @staticmethod
+    def _registration_customer_total(meta: dict[str, Any] | None) -> float | None:
+        provider_total = CartService._registration_provider_total(meta)
+        if provider_total is None or provider_total <= 0:
+            return None
+        from app.service.domain import domain_commission_config as commission
+
+        tld = str((meta or {}).get("tld") or "").lstrip(".").lower()
+        registry_tier = str((meta or {}).get("registryTier") or "").strip().lower()
+        is_premium = (meta or {}).get("isPremium") is True or registry_tier == "premium"
+        service = (
+            commission.CommissionService.PREMIUM_REGISTRATION
+            if is_premium
+            else commission.CommissionService.REGISTRATION
+        )
+        rate = commission.get_rate(service, tld)
+        return commission.apply_markup(provider_total, rate)
+
     async def add_item(
         self,
         user_id: uuid.UUID,
@@ -347,6 +397,8 @@ class CartService:
         meta["registryTier"] = quote.get("registryTier") or (
             "premium" if quote.get("isPremium") else "standard"
         )
+        if quote.get("registrarTotal") is not None:
+            meta["providerPeriodTotalInr"] = float(quote["registrarTotal"])
         if quote.get("providerUnitPriceInr") is not None:
             meta["providerUnitPriceInr"] = float(quote["providerUnitPriceInr"])
         if is_openprovider_managed_registration(meta):
@@ -648,6 +700,7 @@ class CartService:
         product_name: Optional[str] = None
         product_image: Optional[str] = None
         base_price: float = 0.0
+        line_base_price: float = 0.0
         available: bool = True
 
         addon_keys = [k.strip() for k in (item.addon_services or "").split(",") if k.strip()]
@@ -681,6 +734,7 @@ class CartService:
                     meta["gstEnabled"] = bool(tax["gstEnabled"])
                     meta["buyerPayableInr"] = float(tax["totalInr"])
                     item.metadata_json = meta
+            line_base_price = base_price
 
         elif item.product_type == CartProductType.TECHNOLOGY:
             software = await self._get_software(item.product_id)
@@ -733,6 +787,7 @@ class CartService:
                     else:
                         available = False
                         product_name = "Technology (unavailable)"
+            line_base_price = base_price
 
         elif item.product_type == CartProductType.VENTURE_DEAL:
             venture = await self._get_venture(item.product_id)
@@ -747,16 +802,23 @@ class CartService:
                     base_price = float(brand.deal_value or 0)
                 if not self._is_venture_available(venture):
                     available = False
+            line_base_price = base_price
 
         elif item.product_type == CartProductType.DOMAIN_REGISTRATION:
             meta = dict(item.metadata_json or {})
             product_name = meta.get("domainName", "Domain Registration")
             base_price = float(meta.get("price", 0))
+            line_base_price = base_price
+            provider_total = self._registration_provider_total(meta)
+            customer_total = self._registration_customer_total(meta)
+            if provider_total is not None and customer_total is not None:
+                base_price = provider_total
+                line_base_price = customer_total
             if is_openprovider_managed_registration(meta):
                 meta["isManagedAcquisition"] = True
                 item.metadata_json = meta
 
-        line_total = round(base_price + addon_amount + co_brother_fee, 2)
+        line_total = round(line_base_price + addon_amount + co_brother_fee, 2)
 
         # Expose public metadata for domain registrations (period, pricePerYear)
         # and premium marketplace acquisition flags.
