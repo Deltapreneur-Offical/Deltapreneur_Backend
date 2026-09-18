@@ -11,6 +11,7 @@ import pytest
 from app.core.exceptions import AppException
 from app.service.cart.cart_checkout_service import CartCheckoutService
 from app.service.cart.cart_service import CartService
+from app.utils.domain_gst import domain_price_breakdown
 from app.utils.cart_enums import CartProductType
 
 
@@ -159,3 +160,119 @@ async def test_revalidate_bumps_ai_below_minimum_to_two_years():
 def test_require_registrant_still_works():
     with pytest.raises(AppException):
         CartCheckoutService._require_registrant({"firstName": "A"})
+
+
+@pytest.mark.asyncio
+async def test_normal_domain_provider_base_uses_registration_commission_for_cart_and_checkout():
+    item = SimpleNamespace(
+        id=uuid4(),
+        product_type=CartProductType.DOMAIN_REGISTRATION,
+        product_id=uuid4(),
+        selected_plan=None,
+        addon_services=None,
+        co_brother_opt_in=False,
+        metadata_json={
+            "domainName": "example.com",
+            "tld": "com",
+            "period": 1,
+            "minPeriodYears": 1,
+            "price": 1000.0,
+            "pricePerYear": 1000.0,
+            "providerUnitPriceInr": 1000.0,
+            "providerPeriodTotalInr": 1000.0,
+            "isPremium": False,
+            "registryTier": "standard",
+        },
+    )
+
+    with patch(
+        "app.service.domain.domain_commission_config.get_rate",
+        return_value=0.15,
+    ):
+        cart = CartService(session=AsyncMock())
+        response = await cart._build_item_response(item)
+
+        checkout = CartCheckoutService(session=AsyncMock())
+        line_total = await checkout._resolve_line_total(item, buyer=SimpleNamespace(id=uuid4()))
+
+    assert response.base_price == 1000.0
+    assert response.line_total == 1150.0
+    assert line_total == 1150.0
+    assert domain_price_breakdown(line_total, years=1)["totalInr"] == 1357.0
+
+
+@pytest.mark.asyncio
+async def test_existing_normal_domain_cart_row_without_provider_meta_gets_registration_commission():
+    item = SimpleNamespace(
+        id=uuid4(),
+        product_type=CartProductType.DOMAIN_REGISTRATION,
+        product_id=uuid4(),
+        selected_plan=None,
+        addon_services=None,
+        co_brother_opt_in=False,
+        metadata_json={
+            "domainName": "hjki.org",
+            "tld": "org",
+            "period": 1,
+            "minPeriodYears": 1,
+            "price": 1000.0,
+            "pricePerYear": 1000.0,
+            "isPremium": False,
+            "registryTier": "standard",
+        },
+    )
+
+    with patch(
+        "app.service.domain.domain_commission_config.get_rate",
+        return_value=0.15,
+    ):
+        cart = CartService(session=AsyncMock())
+        response = await cart._build_item_response(item)
+
+    assert response.base_price == 1000.0
+    assert response.line_total == 1150.0
+    assert domain_price_breakdown(response.line_total, years=1)["totalInr"] == 1357.0
+
+
+@pytest.mark.asyncio
+async def test_delta_domain_uses_premium_registration_commission_for_cart_and_checkout():
+    item = SimpleNamespace(
+        id=uuid4(),
+        product_type=CartProductType.DOMAIN_REGISTRATION,
+        product_id=uuid4(),
+        selected_plan=None,
+        addon_services=None,
+        co_brother_opt_in=False,
+        metadata_json={
+            "domainName": "delta.example",
+            "tld": "example",
+            "period": 1,
+            "minPeriodYears": 1,
+            "price": 1000.0,
+            "pricePerYear": 1000.0,
+            "providerUnitPriceInr": 1000.0,
+            "providerPeriodTotalInr": 1000.0,
+            "isPremium": True,
+            "registryTier": "premium",
+        },
+    )
+
+    def _rate(service, _tld=None):
+        if service == "premium_registration":
+            return 0.25
+        return 0.15
+
+    with patch(
+        "app.service.domain.domain_commission_config.get_rate",
+        side_effect=_rate,
+    ):
+        cart = CartService(session=AsyncMock())
+        response = await cart._build_item_response(item)
+
+        checkout = CartCheckoutService(session=AsyncMock())
+        line_total = await checkout._resolve_line_total(item, buyer=SimpleNamespace(id=uuid4()))
+
+    assert response.base_price == 1000.0
+    assert response.line_total == 1250.0
+    assert line_total == 1250.0
+    assert domain_price_breakdown(line_total, years=1)["totalInr"] == 1475.0

@@ -1864,7 +1864,10 @@ class CartCheckoutService:
 
         elif item.product_type == CartProductType.DOMAIN_REGISTRATION:
             meta = item.metadata_json or {}
-            base_price = float(meta.get("price", 0))
+            base_price = (
+                CartService._registration_customer_total(meta)
+                or float(meta.get("price", 0))
+            )
 
         return round(base_price + addon_amount + co_brother_fee, 2)
 
@@ -2074,6 +2077,7 @@ class CartCheckoutService:
             meta["registryTier"] = quote.get("registryTier") or (
                 "premium" if is_premium else "standard"
             )
+            meta["providerPeriodTotalInr"] = quote.get("registrarTotal")
             meta["providerUnitPriceInr"] = quote.get("providerUnitPriceInr")
             meta["providerCurrency"] = quote.get("providerCurrency")
             item.metadata_json = meta

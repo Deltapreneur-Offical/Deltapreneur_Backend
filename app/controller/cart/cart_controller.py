@@ -26,15 +26,18 @@ from app.service.cart.openprovider_managed_cart_service import (
     OpenProviderManagedCartService,
 )
 from app.service.cart.premium_marketplace_cart_service import PremiumMarketplaceCartService
+from app.service.domain import domain_commission_config as commission
 
 router = APIRouter(prefix="/api/v1/cart", tags=["Cart"])
 
 
 async def _cart_service(db: AsyncSession = Depends(get_async_db)) -> CartService:
+    await commission.refresh_from_db(db)
     return CartService(db)
 
 
 async def _checkout_service(db: AsyncSession = Depends(get_async_db)) -> CartCheckoutService:
+    await commission.refresh_from_db(db)
     return CartCheckoutService(db)
 
 
