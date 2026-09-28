@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from app.controller.auth.auth_controller import get_current_user
 from app.core.config import settings
 from app.core.database import get_async_db, get_db
-from app.core.public_list_cache import public_list_cache_get, public_list_cache_put
+from app.core.public_list_cache import public_list_cache_clear, public_list_cache_get, public_list_cache_put
 from app.core.dependencies import require_role
 from app.entity.technology_services.technology_service_entity import TechnologyServiceEntity
 from app.entity.technology_services.technology_subscription_entity import TechnologySubscriptionEntity
@@ -185,7 +185,7 @@ DEFAULT_SERVICES_SEED = [
             {"code": "enterprise", "name": "Enterprise", "price_monthly": 99, "price_annually": 990, "features": ["Unmetered Bandwidth", "E-commerce Engine", "Multi-language Support"]}
         ],
         "faqs": [
-            {"question": "Can I connect my OpenProvider or custom domain?", "answer": "Yes, connecting any domain registered through Deltapreneur or third-party registrars takes just one click."}
+            {"question": "Can I connect my Deltapreneur or custom domain?", "answer": "Yes, connecting any domain registered through Deltapreneur or third-party registrars takes just one click."}
         ]
     },
     {
@@ -497,6 +497,95 @@ DEFAULT_SERVICES_SEED = [
 # already-populated table. Schema is owned by Alembic, never created here.
 _catalogue_seed_checked = False
 
+WEBSITE_BUILDER_DOMAIN_FAQ_OLD_QUESTION = "Can I connect my OpenProvider or custom domain?"
+WEBSITE_BUILDER_DOMAIN_FAQ_QUESTION = "Can I connect my Deltapreneur or custom domain?"
+WEBSITE_BUILDER_DOMAIN_FAQ_ANSWER = "Yes, connecting any domain registered through Deltapreneur or third-party registrars takes just one click."
+
+
+def _normalize_website_builder_domain_faq(faqs: list[Any]) -> tuple[list[Any], bool]:
+    changed = False
+    normalized: list[Any] = []
+
+    for faq in faqs:
+        if not isinstance(faq, dict):
+            normalized.append(faq)
+            continue
+
+        question = faq.get("question")
+        if question not in {
+            WEBSITE_BUILDER_DOMAIN_FAQ_OLD_QUESTION,
+            WEBSITE_BUILDER_DOMAIN_FAQ_QUESTION,
+        }:
+            normalized.append(faq)
+            continue
+
+        updated = {
+            **faq,
+            "question": WEBSITE_BUILDER_DOMAIN_FAQ_QUESTION,
+            "answer": WEBSITE_BUILDER_DOMAIN_FAQ_ANSWER,
+        }
+        changed = changed or updated != faq
+        normalized.append(updated)
+
+    return normalized, changed
+
+
+def _sync_website_builder_domain_faq(db: Session) -> None:
+    service = (
+        db.query(TechnologyServiceEntity)
+        .filter(
+            TechnologyServiceEntity.slug == "website-builder",
+            TechnologyServiceEntity.is_deleted.is_(False),
+        )
+        .first()
+    )
+    if not service:
+        return
+
+    try:
+        faqs = json.loads(service.faqs_json) if service.faqs_json else []
+    except (TypeError, ValueError):
+        logger.warning("Could not parse Website Builder FAQs while syncing seed text.")
+        return
+
+    if not isinstance(faqs, list):
+        return
+
+    normalized, changed = _normalize_website_builder_domain_faq(faqs)
+    if changed:
+        service.faqs_json = json.dumps(normalized)
+        db.commit()
+        public_list_cache_clear("tech-services:")
+        logger.info("Website Builder domain FAQ seed text updated.")
+
+
+async def _sync_website_builder_domain_faq_async(db: AsyncSession) -> None:
+    result = await db.execute(
+        select(TechnologyServiceEntity).where(
+            TechnologyServiceEntity.slug == "website-builder",
+            TechnologyServiceEntity.is_deleted.is_(False),
+        )
+    )
+    service = result.scalars().first()
+    if not service:
+        return
+
+    try:
+        faqs = json.loads(service.faqs_json) if service.faqs_json else []
+    except (TypeError, ValueError):
+        logger.warning("Could not parse Website Builder FAQs while syncing seed text.")
+        return
+
+    if not isinstance(faqs, list):
+        return
+
+    normalized, changed = _normalize_website_builder_domain_faq(faqs)
+    if changed:
+        service.faqs_json = json.dumps(normalized)
+        await db.commit()
+        public_list_cache_clear("tech-services:")
+        logger.info("Website Builder domain FAQ seed text updated.")
+
 
 def _build_seed_entities() -> list[TechnologyServiceEntity]:
     """Materialize DEFAULT_SERVICES_SEED as unsaved catalogue rows."""
@@ -542,6 +631,7 @@ def ensure_catalogue_seeded_sync(db: Session) -> None:
             db.add_all(_build_seed_entities())
             db.commit()
             logger.info("Technology Services catalogue seeded successfully.")
+        _sync_website_builder_domain_faq(db)
         _catalogue_seed_checked = True
     except IntegrityError:
         # Another worker seeded concurrently; slug is unique so this is benign.
@@ -569,6 +659,7 @@ async def ensure_catalogue_seeded(db: AsyncSession) -> None:
             db.add_all(_build_seed_entities())
             await db.commit()
             logger.info("Technology Services catalogue seeded successfully.")
+        await _sync_website_builder_domain_faq_async(db)
         _catalogue_seed_checked = True
     except IntegrityError:
         # Another worker seeded concurrently; slug is unique so this is benign.
