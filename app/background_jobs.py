@@ -83,6 +83,13 @@ async def _run_locked_scheduler_work(work_session, tick: int) -> int:
         SoftwareAuctionService,
     )
 
+    try:
+        ended_domain = await auction_timer_service.sweep_expired()
+        if ended_domain:
+            logger.info("Ended %s expired domain auctions", ended_domain)
+    except Exception:
+        logger.exception("background_scheduler.domain_auction_close_failed")
+
     software_auction_service = SoftwareAuctionService(work_session)
     ended_software = await software_auction_service.end_expired_auctions()
     if ended_software:

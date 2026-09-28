@@ -31,6 +31,7 @@ from app.model.auction.auction_response import (
     AuctionResponse,
 )
 from app.service.auction.auction_service import AuctionService
+from app.service.auction.auction_timer_service import auction_timer_service
 from app.service.auction.bid_service import BidService
 from app.service.platform.platform_settings_service import PlatformSettingsService
 from app.utils.enums import AuctionStatus
@@ -134,8 +135,10 @@ async def list_active_auctions(
     page_size: int = Query(50, ge=1, le=200),
     service: AuctionService = Depends(get_auction_service),
 ) -> dict:
+    # Heal auctions whose clock ended but whose status is still ACTIVE/EXTENDED.
+    closed = await auction_timer_service.sweep_expired()
     cache_key = f"auctions:domain:active:{page}:{page_size}"
-    cached = public_list_cache_get(cache_key)
+    cached = None if closed else public_list_cache_get(cache_key)
     if cached is not None:
         return cached
     items = await service.list_active_enriched(page=page, page_size=page_size)
