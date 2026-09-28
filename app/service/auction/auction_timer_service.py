@@ -100,18 +100,28 @@ class AuctionTimerService:
     # ------------------------------------------------------------------ #
 
     async def _sweep(self) -> None:
+        await self.sweep_expired()
+
+    async def sweep_expired(self) -> int:
+        """Close ACTIVE/EXTENDED auctions whose end_time has passed.
+
+        Safe to call from the APScheduler job, the main background loop, and
+        public auction reads. A missed timer tick must not leave an auction
+        stuck ACTIVE after the clock has ended.
+        """
         if self._running:
             logger.debug("auction_timer.sweep.skip already_running")
-            return
+            return 0
         self._running = True
         try:
-            await self._sweep_once()
+            return await self._sweep_once()
         except Exception:  # noqa: BLE001
             logger.exception("auction_timer.sweep.error")
+            return 0
         finally:
             self._running = False
 
-    async def _sweep_once(self) -> None:
+    async def _sweep_once(self) -> int:
         # 1) Collect candidate ids in a short-lived session.
         async with AsyncSessionLocal() as session:
             repo = AuctionRepository(session)
@@ -119,7 +129,7 @@ class AuctionTimerService:
             candidate_ids = [a.id for a in expired]
 
         if not candidate_ids:
-            return
+            return 0
 
         logger.info(
             "auction_timer.sweep candidates=%s", len(candidate_ids)
@@ -128,19 +138,26 @@ class AuctionTimerService:
         # 2) Resolve each in its own transaction. Sequential — keeps lock
         #    contention predictable; parallelize via asyncio.gather with
         #    bounded concurrency if/when needed.
+        resolved = 0
         for auction_id in candidate_ids:
-            await self._resolve_one(auction_id)
+            if await self._resolve_one(auction_id):
+                resolved += 1
+        if resolved:
+            logger.info("auction_timer.sweep.resolved count=%s", resolved)
+        return resolved
 
     @staticmethod
-    async def _resolve_one(auction_id) -> None:
+    async def _resolve_one(auction_id) -> bool:
         try:
             async with AsyncSessionLocal() as session:
                 winner_service = WinnerService(session)
                 await winner_service.resolve_auction(auction_id)
+            return True
         except Exception:  # noqa: BLE001
             logger.exception(
                 "auction_timer.resolve.failed auction=%s", auction_id
             )
+            return False
 
 
 # Module-level singleton — import and call .start() / .shutdown() from FastAPI

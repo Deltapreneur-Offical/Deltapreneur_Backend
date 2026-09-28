@@ -180,8 +180,10 @@ class AuctionService:
         from app.service.domain.domain_auction_verification_service import (
             is_auction_publicly_visible,
         )
+        from app.service.auction.auction_timer_service import auction_timer_service
         from app.utils.enums import AuctionStatus
 
+        await auction_timer_service.sweep_expired()
         auction = await self._repo.get_auction_by_id(auction_id, load_bids=True)
         if auction is None:
             raise AppException("Auction not found.", status_code=404)

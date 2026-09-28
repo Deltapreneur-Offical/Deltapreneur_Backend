@@ -210,6 +210,11 @@ class WinnerPaymentLifecycleAsync:
                 }:
                     auction.status = AuctionStatus.UNSOLD
                     auction.current_winner_id = None
+                    from app.service.auction.winner_service import WinnerService
+
+                    await WinnerService(self._session).release_listing_for_direct_sale(
+                        auction.domain_id,
+                    )
             elif auction_type == "TECHNOLOGY" or auction_type == "SOFTWARE":
                 from app.entity.cocreation.software_auction import SoftwareAuction
                 from app.utils.enums import AuctionStatus

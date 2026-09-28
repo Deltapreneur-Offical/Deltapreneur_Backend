@@ -26,6 +26,11 @@ def _alive_auction() -> Any:
     return Auction.is_deleted.is_(False)
 
 
+def _still_running() -> Any:
+    """Public 'live' auctions only. Clock-ended rows are resolved separately."""
+    return Auction.end_time > datetime.now(timezone.utc)
+
+
 def _public_auction_listing_visibility() -> Any:
     """Hide auction-domain listings until admin verification_status is VERIFIED."""
     return or_(
@@ -126,6 +131,7 @@ class AuctionRepository:
                 Auction.status.in_(
                     [AuctionStatus.ACTIVE, AuctionStatus.EXTENDED]
                 ),
+                _still_running(),
                 _alive_auction(),
             )
             .order_by(Auction.end_time.asc())
@@ -182,6 +188,7 @@ class AuctionRepository:
                 Auction.status.in_(
                     [AuctionStatus.ACTIVE, AuctionStatus.EXTENDED]
                 ),
+                _still_running(),
                 _alive_auction(),
                 _public_auction_listing_visibility(),
             )
@@ -218,6 +225,7 @@ class AuctionRepository:
                 Auction.status.in_(
                     [AuctionStatus.ACTIVE, AuctionStatus.EXTENDED]
                 ),
+                _still_running(),
                 _alive_auction(),
                 _public_auction_listing_visibility(),
                 func.lower(Domain.domain_name).like(pattern),
@@ -289,6 +297,7 @@ class AuctionRepository:
                 Auction.status.in_(
                     [AuctionStatus.ACTIVE, AuctionStatus.EXTENDED]
                 ),
+                _still_running(),
                 _alive_auction(),
                 _public_auction_listing_visibility(),
             )

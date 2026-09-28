@@ -5,12 +5,10 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppException
-from app.entity.auction.auction_entity import Auction
 from app.entity.cobranding.domain_listing_entity import DomainListing
 from app.entity.coventure.agreement_entity import Agreement
 from app.entity.coventure.contact_info_entity import ContactInfo
@@ -22,7 +20,6 @@ from app.model.marketplace.domain_listing_request import (
 from app.model.venture.venture_request import ContactInfoRequest
 from app.repository.domain_listing_repository import DomainListingRepository
 from app.service.platform.listing_pricing_service import ListingPricingService
-from app.utils.enums import AuctionStatus
 from app.utils.marketplace_enums import DomainListingStatus, SaleType
 from app.service.marketplace.listing_view_counter import record_domain_listing_view
 from app.utils.pagination import offset_limit
@@ -47,14 +44,17 @@ class MarketplaceDomainService:
         """Return (total, items). When page_size is None, returns all active rows."""
         if featured_only:
             items = list(await self._repo.list_homepage_featured(limit=page_size))
+            await self._restore_unsold_auction_listings(items)
             return len(items), items
 
         if page_size is None:
             items = list(await self._repo.list_all_active())
+            await self._restore_unsold_auction_listings(items)
             return len(items), items
         total = await self._repo.count_all_active()
         off, lim = offset_limit(page, page_size)
         items = list(await self._repo.list_all_active(offset=off, limit=lim))
+        await self._restore_unsold_auction_listings(items)
         return total, items
 
     async def search_listed_non_auction(self, query: str) -> list[DomainListing]:
@@ -68,34 +68,17 @@ class MarketplaceDomainService:
         return listings
 
     async def _restore_unsold_auction_listings(self, listings: list[DomainListing]) -> None:
-        """Heal listings still marked AUCTION after a no-bid / cancelled sale."""
-        stale = [
-            listing for listing in listings
-            if listing.sale_type == SaleType.AUCTION
-            and listing.domain_status != DomainListingStatus.SOLD
-        ]
-        if not stale:
-            return
+        """Heal listings left on auction, or returned without their asking price."""
+        from app.service.domain.direct_sale_restore import restore_listing_after_no_sale
+
         restored = False
-        no_sale = {
-            AuctionStatus.UNSOLD,
-            AuctionStatus.CANCELLED,
-            AuctionStatus.CLOSED,
-            AuctionStatus.TAKEN_DOWN,
-        }
-        for listing in stale:
-            result = await self._session.execute(
-                select(Auction)
-                .where(Auction.domain_id == listing.id, Auction.is_deleted.is_(False))
-                .order_by(Auction.created_at.desc())
-                .limit(1)
-            )
-            latest = result.scalar_one_or_none()
-            if latest is None or latest.status not in no_sale:
+        for listing in listings:
+            if listing.domain_status == DomainListingStatus.SOLD:
                 continue
-            listing.sale_type = SaleType.ONE_TIME
-            listing.domain_status = DomainListingStatus.AVAILABLE
-            restored = True
+            if listing.sale_type != SaleType.AUCTION and float(listing.asking_price or 0) > 0:
+                continue
+            if await restore_listing_after_no_sale(self._session, listing):
+                restored = True
         if restored:
             await self._session.commit()
 
