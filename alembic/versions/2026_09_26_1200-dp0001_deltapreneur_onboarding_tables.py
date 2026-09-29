@@ -68,11 +68,9 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
     )
-    op.create_index(
-        "ix_deltapreneur_applications_status",
-        "deltapreneur_applications",
-        ["status"],
-    )
+    # NOTE: indexes for columns declared with ``index=True`` above (email, status)
+    # are already created by ``op.create_table`` under the standard
+    # ``ix_<table>_<column>`` names — do NOT create them again here.
 
     op.create_table(
         "deltapreneur_invitations",
@@ -102,16 +100,9 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
     )
-    op.create_index(
-        "ix_deltapreneur_invitations_token",
-        "deltapreneur_invitations",
-        ["token"],
-    )
-    op.create_index(
-        "ix_deltapreneur_invitations_application_id",
-        "deltapreneur_invitations",
-        ["application_id"],
-    )
+    # ix_deltapreneur_invitations_token (unique) and
+    # ix_deltapreneur_invitations_application_id are created by create_table
+    # via ``index=True`` above — not repeated here.
 
     op.create_table(
         "deltapreneur_onboarding_state",
@@ -140,11 +131,8 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
     )
-    op.create_index(
-        "ix_deltapreneur_onboarding_state_app_user_id",
-        "deltapreneur_onboarding_state",
-        ["app_user_id"],
-    )
+    # ix_deltapreneur_onboarding_state_app_user_id (unique) is created by
+    # create_table via ``unique=True, index=True`` above — not repeated here.
 
 
 def downgrade() -> None:
