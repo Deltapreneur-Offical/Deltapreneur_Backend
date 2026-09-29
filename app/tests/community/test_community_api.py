@@ -149,11 +149,21 @@ def test_create_my_profile_success():
 
     _login_as(user)
 
+    # The Deltapreneur onboarding gate requires eligibility (existing profile,
+    # >= Rs 40L self-declared revenue, or an invitation) before profile creation.
+    # These legacy fixtures simulate an eligible user.
+    import app.service.deltapreneur.deltapreneur_onboarding_service as onboarding_svc
+
+    onboarding_patch = patch.object(
+        onboarding_svc.DeltapreneurOnboardingService,
+        "ensure_onboarding_eligibility",
+    )
+
     try:
         def save_side_effect(_db, community):
             return community
 
-        with patch(
+        with onboarding_patch, patch(
             "app.service.community.community_service.CommunityRepository.find_any_by_app_user_id",
             return_value=None,
         ), patch(
@@ -193,23 +203,25 @@ def test_create_my_profile_duplicate_returns_409():
 
     _login_as(user)
 
-    try:
-        with patch(
-            "app.service.community.community_service.CommunityRepository.find_any_by_app_user_id",
-            return_value=existing_profile,
-        ):
-            response = client.post(
-                "/api/v1/community/my",
-                json={
-                    "name": "Chris Alexander",
-                    "role": "EMPLOYEE",
-                },
-            )
+    # Grandfathered user: the gate sees an existing (non-deleted) profile.
+    import app.service.deltapreneur.deltapreneur_onboarding_service as onboarding_svc
 
-        assert response.status_code == 409
+    with patch.object(
+        onboarding_svc.DeltapreneurOnboardingService,
+        "is_user_eligible",
+        return_value=True,
+    ):
+        response = client.post(
+            "/api/v1/community/my",
+            json={
+                "name": "Chris Alexander",
+                "role": "EMPLOYEE",
+            },
+        )
 
-    finally:
-        _clear_login()
+    assert response.status_code == 409
+
+    _clear_login()
 
 
 def test_get_my_profile_success():

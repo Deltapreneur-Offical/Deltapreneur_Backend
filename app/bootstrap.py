@@ -156,6 +156,10 @@ from app.controller.virtual_assistant.virtual_assistant_controller import (
 from app.controller.virtual_assistant.virtual_assistant_workspace_controller import (
     router as virtual_assistant_workspace_router,
 )
+from app.controller.deltapreneur.deltapreneur_onboarding_controller import (
+    router as deltapreneur_onboarding_router,
+    admin_router as deltapreneur_onboarding_admin_router,
+)
 from app.core.bot_middleware import BotGuardMiddleware
 from app.core.config import settings
 from app.core.error_middleware import UnhandledExceptionMiddleware
@@ -304,6 +308,8 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(feedback_router)
     app.include_router(virtual_assistant_router)
     app.include_router(virtual_assistant_workspace_router)
+    app.include_router(deltapreneur_onboarding_router)
+    app.include_router(deltapreneur_onboarding_admin_router)
     app.include_router(integration_router)
     app.include_router(oauth_compat_router)
 

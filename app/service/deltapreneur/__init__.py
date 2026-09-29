@@ -1,0 +1,1 @@
+"""Deltapreneur onboarding service package (independent from Virtual Assistants)."""
