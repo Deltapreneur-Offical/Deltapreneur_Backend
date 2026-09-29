@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.core.config import settings
 from app.entity.community.community import Community
 
 REQUIRED_FIELD_CHECKS: list[tuple[str, str]] = [
@@ -32,6 +33,8 @@ def _has_skills(skills: str | None) -> bool:
 def _field_complete(community: Community, field: str) -> bool:
     if field == "name":
         return _non_empty_str(getattr(community, "name", None))
+    if field == "company_name":
+        return _non_empty_str(getattr(community, "company_name", None))
     if field == "about":
         return _non_empty_str(getattr(community, "about", None))
     if field == "role":
@@ -99,3 +102,37 @@ def is_profile_complete(community: Community) -> bool:
         if not _field_complete(community, field):
             return False
     return True
+
+
+# ── Simplified profile completion (SIMPLIFIED_CREATOR_PROFILE) ────────────────
+#
+# The simplified Deltapreneur profile form only collects Full Name (LinkedIn
+# auto-fetch), Company Name, and LinkedIn Profile URL as required. A profile is
+# "simplified complete" iff those three fields exist. Industry, Headline,
+# Website, Featured Links, and every legacy field (about, role, skills,
+# location, why_im_here, expected_rate, …) are NOT required in this mode.
+#
+# The legacy checks above are preserved untouched and remain authoritative when
+# the SIMPLIFIED_CREATOR_PROFILE setting is disabled.
+
+SIMPLIFIED_REQUIRED_FIELDS: list[str] = [
+    "name",
+    "company_name",
+    "linked_in_profile_url",
+]
+
+
+def is_profile_complete_simplified(community: Community) -> bool:
+    """Simplified-mode completion: Full Name + Company Name + LinkedIn URL."""
+    return all(_field_complete(community, field) for field in SIMPLIFIED_REQUIRED_FIELDS)
+
+
+def is_profile_listable(community: Community) -> bool:
+    """Public-listing gate used by community services.
+
+    Legacy completion rule always applies. When SIMPLIFIED_CREATOR_PROFILE is
+    enabled, a profile that satisfies the simplified rule is also listable.
+    """
+    if is_profile_complete(community):
+        return True
+    return bool(settings.SIMPLIFIED_CREATOR_PROFILE) and is_profile_complete_simplified(community)

@@ -87,6 +87,11 @@ from app.entity.ai.cobrother_ai import (  # noqa: F401
     Favorite,
     UserPreference,
 )
+from app.entity.deltapreneur.application import DeltapreneurApplication  # noqa: F401
+from app.entity.deltapreneur.invitation import DeltapreneurInvitation  # noqa: F401
+from app.entity.deltapreneur.onboarding_state import (  # noqa: F401
+    DeltapreneurOnboardingState,
+)
 
 
 # Alembic Config object — provides access to alembic.ini values.

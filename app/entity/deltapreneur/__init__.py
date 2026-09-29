@@ -1,0 +1,1 @@
+"""Deltapreneur onboarding entities (self-declared eligibility, applications, invitations)."""

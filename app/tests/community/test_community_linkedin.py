@@ -62,13 +62,26 @@ def _clear_login():
     app.dependency_overrides.clear()
 
 
+# The Deltapreneur onboarding gate (>= Rs 40L revenue / invitation / grandfathered
+# profile) runs before LinkedIn auth + callback flows.  These tests exercise URL
+# construction and callback mechanics, so they simulate an ELIGIBLE user.
+def _eligible():
+    import app.service.deltapreneur.deltapreneur_onboarding_service as onboarding_svc
+
+    return patch.object(
+        onboarding_svc.DeltapreneurOnboardingService,
+        "is_user_eligible",
+        return_value=True,
+    )
+
+
 def test_linkedin_auth_returns_503_when_not_configured():
     user = _fake_user()
 
     _login_as(user)
 
     try:
-        with patch.object(settings, "LINKEDIN_CLIENT_ID", None), patch.object(
+        with _eligible(), patch.object(settings, "LINKEDIN_CLIENT_ID", None), patch.object(
             settings, "LINKEDIN_CLIENT_SECRET", None
         ), patch.object(settings, "LINKEDIN_REDIRECT_URI", None):
             response = client.get("/api/v1/community/linkedin/auth")
@@ -87,7 +100,7 @@ def test_linkedin_auth_url_success():
     _login_as(user)
 
     try:
-        with patch.object(settings, "LINKEDIN_CLIENT_ID", "client-id"), patch.object(
+        with _eligible(), patch.object(settings, "LINKEDIN_CLIENT_ID", "client-id"), patch.object(
             settings, "LINKEDIN_CLIENT_SECRET", "client-secret"
         ), patch.object(
             settings,
@@ -120,7 +133,7 @@ def test_linkedin_auth_url_uses_demo_host_when_forwarded():
     _login_as(user)
 
     try:
-        with patch.object(settings, "LINKEDIN_CLIENT_ID", "client-id"), patch.object(
+        with _eligible(), patch.object(settings, "LINKEDIN_CLIENT_ID", "client-id"), patch.object(
             settings, "LINKEDIN_CLIENT_SECRET", "client-secret"
         ), patch.object(
             settings,
@@ -222,7 +235,7 @@ def test_linkedin_auth_url_includes_return_origin_in_state():
     _login_as(user)
 
     try:
-        with patch.object(settings, "LINKEDIN_CLIENT_ID", "client-id"), patch.object(
+        with _eligible(), patch.object(settings, "LINKEDIN_CLIENT_ID", "client-id"), patch.object(
             settings, "LINKEDIN_CLIENT_SECRET", "client-secret"
         ), patch.object(
             settings,
@@ -282,7 +295,7 @@ def test_linkedin_service_callback_updates_profile_success():
             return kwargs["community"]
         return args[1]
 
-    with patch.object(settings, "LINKEDIN_CLIENT_ID", "client-id"), patch.object(
+    with _eligible(), patch.object(settings, "LINKEDIN_CLIENT_ID", "client-id"), patch.object(
         settings, "LINKEDIN_CLIENT_SECRET", "client-secret"
     ), patch.object(
         settings,

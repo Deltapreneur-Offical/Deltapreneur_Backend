@@ -104,6 +104,16 @@ def create_my_profile(
     db: Session = Depends(get_db),
     current_user: AppUser = Depends(get_current_user),
 ):
+    # Deltapreneur onboarding gate: profile creation requires self-declared
+    # eligibility (>= Rs 40L) or a grandfathered existing profile.  Invited
+    # users get their eligibility recorded when the invitation is consumed
+    # during the LinkedIn callback, so they pass this check afterwards.
+    from app.service.deltapreneur.deltapreneur_onboarding_service import (
+        DeltapreneurOnboardingService,
+    )
+
+    DeltapreneurOnboardingService.ensure_onboarding_eligibility(db, current_user)
+
     profile = CommunityService.create_my_profile(
         db=db,
         request=request,
@@ -155,9 +165,30 @@ def delete_my_profile(
 def linkedin_auth_url(
     request: Request,
     return_origin: str | None = None,
+    invitation_token: str | None = None,
+    db: Session = Depends(get_db),
     current_user: AppUser = Depends(get_current_user),
 ):
     from app.service.community import linkedin_oauth
+
+    from app.service.deltapreneur.deltapreneur_onboarding_service import (
+        DeltapreneurOnboardingService,
+    )
+
+    # Deltapreneur onboarding gate: a user with no existing community profile
+    # must present either self-declared eligibility (>= Rs 40L, stored earlier
+    # via the eligibility endpoint) or a valid invitation token.  Existing
+    # Deltapreneurs are grandfathered and pass untouched.
+    if not DeltapreneurOnboardingService.is_user_eligible(db, current_user):
+        if not invitation_token:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "Deltapreneur onboarding requires either an annual business revenue "
+                    "of Rs 40 lakh or above, or a valid invitation link."
+                ),
+            )
+        DeltapreneurOnboardingService.validate_invitation_token(db, invitation_token)
 
     redirect_uri = linkedin_oauth.resolve_linkedin_redirect_uri(
         request_host=request.headers.get("x-forwarded-host") or request.headers.get("host"),
@@ -171,6 +202,7 @@ def linkedin_auth_url(
         current_user=current_user,
         redirect_uri=redirect_uri,
         return_origin=return_origin,
+        invitation_token=invitation_token,
     )
     # Keep ApiResponse compatibility while also exposing the URL at top level
     # for the React LinkedIn button.

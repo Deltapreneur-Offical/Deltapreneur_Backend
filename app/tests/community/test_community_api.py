@@ -149,11 +149,21 @@ def test_create_my_profile_success():
 
     _login_as(user)
 
+    # The Deltapreneur onboarding gate requires eligibility (existing profile,
+    # >= Rs 40L self-declared revenue, or an invitation) before profile creation.
+    # These legacy fixtures simulate an eligible user.
+    import app.service.deltapreneur.deltapreneur_onboarding_service as onboarding_svc
+
+    onboarding_patch = patch.object(
+        onboarding_svc.DeltapreneurOnboardingService,
+        "ensure_onboarding_eligibility",
+    )
+
     try:
         def save_side_effect(_db, community):
             return community
 
-        with patch(
+        with onboarding_patch, patch(
             "app.service.community.community_service.CommunityRepository.find_any_by_app_user_id",
             return_value=None,
         ), patch(
@@ -193,8 +203,15 @@ def test_create_my_profile_duplicate_returns_409():
 
     _login_as(user)
 
+    # Grandfathered user: the onboarding gate passes (existing profile), and the
+    # service then rejects the duplicate with 409.
+    import app.service.deltapreneur.deltapreneur_onboarding_service as onboarding_svc
+
     try:
-        with patch(
+        with patch.object(
+            onboarding_svc.DeltapreneurOnboardingService,
+            "ensure_onboarding_eligibility",
+        ), patch(
             "app.service.community.community_service.CommunityRepository.find_any_by_app_user_id",
             return_value=existing_profile,
         ):

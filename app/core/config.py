@@ -157,6 +157,13 @@ class Settings(BaseSettings):
 
     TRUST_PROXY_HEADERS: bool = False
 
+    # Simplified Deltapreneur profile: when enabled, a creator profile needs only
+    # Full Name + Company Name + LinkedIn Profile URL to count as complete and
+    # publicly listable. The legacy completion rule always still applies; this
+    # only ADDS a path to completion. Set SIMPLIFIED_CREATOR_PROFILE=false to
+    # restore the old behavior exactly.
+    SIMPLIFIED_CREATOR_PROFILE: bool = True
+
     ENVIRONMENT: str = "development"
 
     # Login revokes a user's other sessions, but only within the same scope.

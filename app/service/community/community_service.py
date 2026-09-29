@@ -27,6 +27,7 @@ from app.core.config import settings
 from app.utils.community_profile_completion import (
     evaluate_profile_completion,
     is_profile_complete,
+    is_profile_listable,
 )
 
 
@@ -308,8 +309,8 @@ class CommunityService:
 
     @staticmethod
     def _sync_listable_approval(community: Community) -> None:
-        """Mark profiles listable only when all mandatory creator fields are complete."""
-        community.is_approved = is_profile_complete(community)
+        """Mark profiles listable when the legacy OR simplified rule is satisfied."""
+        community.is_approved = is_profile_listable(community)
 
 
     @staticmethod
@@ -457,7 +458,7 @@ class CommunityService:
             else:
                 communities = CommunityRepository.find_all(db)
 
-            complete = [community for community in communities if is_profile_complete(community)]
+            complete = [community for community in communities if is_profile_listable(community)]
             if page_size is not None:
                 complete = complete[:page_size]
 
@@ -518,7 +519,7 @@ class CommunityService:
             current_user is not None
             and community.app_user_id == current_user.id
         )
-        if not is_profile_complete(community) and not is_owner:
+        if not is_profile_listable(community) and not is_owner:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Creator profile not found",
@@ -791,11 +792,28 @@ class CommunityService:
         return str(payload.get("action") or "").strip() or None
 
     @staticmethod
+    def _parse_linkedin_oauth_state_invitation_token(state: str) -> str | None:
+        """Extract the optional ``invitation_token`` from a signed LinkedIn OAuth state.
+
+        Dedicated helper for the Deltapreneur invitation onboarding flow.  Like
+        ``_parse_linkedin_oauth_state_action`` it does NOT change the signature
+        of ``_parse_linkedin_oauth_state_payload``.
+        """
+        from app.core.oauth_state import parse_oauth_state
+
+        raw = CommunityService._normalize_linkedin_oauth_state(state)
+        payload = parse_oauth_state(raw, provider="linkedin_community")
+        if not isinstance(payload, dict):
+            return None
+        return str(payload.get("invitation_token") or "").strip() or None
+
+    @staticmethod
     def _encode_linkedin_oauth_state(
         *,
         email: str,
         redirect_uri: str,
         return_origin: str | None = None,
+        invitation_token: str | None = None,
     ) -> str:
         from app.core.oauth_state import create_oauth_state
 
@@ -805,6 +823,7 @@ class CommunityService:
             email=email,
             redirect_uri=redirect_uri,
             return_origin=safe_origin,
+            invitation_token=invitation_token,
         )
 
     @staticmethod
@@ -819,6 +838,7 @@ class CommunityService:
         *,
         redirect_uri: str,
         return_origin: str | None = None,
+        invitation_token: str | None = None,
     ) -> str:
         if not CommunityService._linkedin_config_ready():
             raise HTTPException(
@@ -830,6 +850,7 @@ class CommunityService:
             email=current_user.email,
             redirect_uri=redirect_uri,
             return_origin=return_origin,
+            invitation_token=invitation_token,
         )
 
         return linkedin_oauth.build_authorization_url(
@@ -1005,6 +1026,32 @@ class CommunityService:
         if not user or user.is_deleted:
             raise ValueError("User not found")
 
+        # ── Deltapreneur onboarding eligibility gate ─────────────────────────
+        # A user WITHOUT an existing community profile must be either
+        # self-declared eligible (>= Rs 40L revenue) or arrive with a valid,
+        # unused, unexpired secret invitation token carried in the signed
+        # OAuth state.  Existing Deltapreneurs are grandfathered and pass
+        # untouched.  Consuming the invitation happens only after the profile
+        # is actually saved (see end of this method).
+        from app.service.deltapreneur.deltapreneur_onboarding_service import (
+            DeltapreneurOnboardingService,
+        )
+
+        invitation_token = (
+            CommunityService._parse_linkedin_oauth_state_invitation_token(state) or ""
+        )
+        if not DeltapreneurOnboardingService.is_user_eligible(db, user):
+            if not invitation_token:
+                raise ValueError(
+                    "Deltapreneur onboarding requires either an annual business revenue "
+                    "of Rs 40 lakh or above, or a valid invitation link."
+                )
+            # Validate but do NOT consume yet — consumption is one-time and must
+            # only happen if profile creation actually succeeds. The gate read
+            # and the profile write below share this request's session, so a
+            # link whose approval was revoked can never half-create a profile.
+            DeltapreneurOnboardingService.validate_invitation_token(db, invitation_token)
+
         try:
             token_body = linkedin_oauth.exchange_authorization_code_response(
                 client_id=settings.LINKEDIN_CLIENT_ID,
@@ -1101,6 +1148,9 @@ class CommunityService:
 
         CommunityService._sync_listable_approval(community)
 
+        # Saved on this request's own session — the same one that validated the
+        # invitation above — so the application-status gate is race-proof with
+        # the profile write (a mid-OAuth admin revoke blocks the whole flow).
         try:
             saved = CommunityRepository.save(db, community)
         except IntegrityError:
@@ -1123,5 +1173,21 @@ class CommunityService:
             logging.getLogger(__name__).exception(
                 "LinkedIn profile saved but notification failed"
             )
+
+        # ── Deltapreneur invitation consumption (one-time use) ───────────────
+        # Runs only after the profile row is saved, so a failed OAuth run never
+        # burns the applicant's single-use invitation.
+        if invitation_token:
+            try:
+                DeltapreneurOnboardingService.consume_invitation(
+                    db=db,
+                    token=invitation_token,
+                    user=user,
+                )
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Deltapreneur invitation consumption failed user=%s", user.email
+                )
+                raise
 
         return saved.id, bool(profile_url)

@@ -789,10 +789,10 @@ class AuthService:
         )
         if existing_oauth_user:
             AuthService._assert_user_may_authenticate(existing_oauth_user)
-            if provider == "linkedin":
-                AuthService._ensure_linkedin_community_profile(
-                    db, existing_oauth_user, provider_id, firstname, lastname, picture
-                )
+            # Deltapreneur onboarding rework: social login authenticates ONLY.
+            # Creator/Deltapreneur profiles are never created or touched during
+            # login — onboarding happens exclusively via /creator + revenue gate
+            # (or an admin-issued invitation link).
             db.commit()
             return AuthService._create_authenticated_session(
                 db=db,
@@ -807,6 +807,9 @@ class AuthService:
             from app.entity.community.community import Community
             from app.repository.community_repository import CommunityRepository
 
+            # Login matching only: an existing Deltapreneur whose community
+            # profile carries this LinkedIn id can sign in with LinkedIn.
+            # No profile is created or modified here (login-only rule).
             existing_linkedin_community = CommunityRepository.find_by_linked_in_id(
                 db,
                 linked_in_id=provider_id,
@@ -818,14 +821,6 @@ class AuthService:
                 )
                 if linkedin_user:
                     AuthService._assert_user_may_authenticate(linkedin_user)
-                    AuthService._ensure_linkedin_community_profile(
-                        db,
-                        linkedin_user,
-                        provider_id,
-                        firstname,
-                        lastname,
-                        picture,
-                    )
                     db.commit()
                     return AuthService._create_authenticated_session(
                         db=db,
@@ -861,10 +856,7 @@ class AuthService:
                 )
             existing_email_user.oauth_provider = provider
             existing_email_user.oauth_provider_id = provider_id
-            if provider == "linkedin":
-                AuthService._ensure_linkedin_community_profile(
-                    db, existing_email_user, provider_id, firstname, lastname, picture
-                )
+            # Login-only: no creator profile side effects on social login.
             db.commit()
             db.refresh(existing_email_user)
             return AuthService._create_authenticated_session(
@@ -900,10 +892,8 @@ class AuthService:
             profile_complete=False,
         )
         saved_user = UserRepository.save(db, user)
-        if provider == "linkedin":
-            AuthService._ensure_linkedin_community_profile(
-                db, saved_user, provider_id, firstname, lastname, picture
-            )
+        # Login-only: a brand-new social account gets NO creator profile.
+        # They onboard through /creator → Connect with LinkedIn → revenue gate.
         return AuthService._create_authenticated_session(
             db=db,
             user=saved_user,
@@ -922,8 +912,28 @@ class AuthService:
         lastname: str | None,
         picture: str | None,
     ) -> None:
+        """RETAINED BUT RETIRED — do not call from login flows.
+
+        The Deltapreneur onboarding rework made social login strictly
+        login-only.  Creator/Deltapreneur profiles are now created only via
+        /creator -> Connect with LinkedIn (community OAuth callback) after the
+        revenue gate, or by consuming an admin-issued invitation link.  This
+        helper is kept so history/rollback is easy, but no active code path
+        invokes it.
+        """
         from app.entity.community.community import Community
         from app.repository.community_repository import CommunityRepository
+
+        from app.service.deltapreneur.deltapreneur_onboarding_service import (
+            DeltapreneurOnboardingService,
+        )
+
+        if not DeltapreneurOnboardingService.is_user_eligible(db, user):
+            logging.getLogger(__name__).info(
+                "Deltapreneur gate: skipping creator profile auto-creation for user=%s (not eligible)",
+                user.email,
+            )
+            return
 
         # Clear conflicting linked_in_id from any other community profile (including soft-deleted ones)
         other_communities = db.query(Community).filter(
