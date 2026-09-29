@@ -14,7 +14,11 @@ def test_alembic_can_locate_render_techmkt001_stamp():
     rev = script.get_revision("techmkt001")
     assert rev is not None
     assert rev.revision == "techmkt001"
-    assert script.get_current_head() == "techmkt002"
+    # techmkt002 must stay in the ancestry of the (single) head; the head itself
+    # is not hard-coded because newer migrations move it forward.
+    head = script.get_current_head()
+    ancestors = {sc.revision for sc in script.walk_revisions(base="base", head=head)}
+    assert "techmkt002" in ancestors
 
 
 def test_alembic_can_locate_render_techmkt002_stamp():

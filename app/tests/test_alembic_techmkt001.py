@@ -59,9 +59,17 @@ def test_techmkt002_revision_is_discoverable():
     assert rev.down_revision == "techmkt001"
 
 
-def test_single_head_is_techmkt002():
+def test_single_head_descends_from_techmkt002():
+    """One head only, and techmkt002 stays in its ancestry.
+
+    The head is intentionally NOT hard-coded: newer migrations (e.g. dp0001)
+    legitimately move the head forward without touching the Render stamps.
+    """
     script = _script()
-    assert script.get_heads() == ["techmkt002"]
+    heads = script.get_heads()
+    assert len(heads) == 1
+    ancestors = {sc.revision for sc in script.walk_revisions(base="base", head=heads[0])}
+    assert "techmkt002" in ancestors
 
 
 def test_upgrade_path_includes_marketplace_and_legacy_ids():
@@ -70,8 +78,9 @@ def test_upgrade_path_includes_marketplace_and_legacy_ids():
     assert "techmkt001" in revisions
     assert "techmkt002" in revisions
     assert "7f3e7e682dc7" in revisions
-    # walk_revisions yields newest-first; latest legacy id is the head.
-    assert revisions[0] == "techmkt002"
+    # walk_revisions yields newest-first; the first entry is the (single) head,
+    # which may be a newer migration than techmkt002.
+    assert revisions[0] == script.get_current_head()
     assert revisions.index("techmkt002") < revisions.index("techmkt001")
     assert revisions.index("techmkt001") < revisions.index("7f3e7e682dc7")
 

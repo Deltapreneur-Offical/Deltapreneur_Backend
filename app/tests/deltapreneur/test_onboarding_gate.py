@@ -373,9 +373,13 @@ def _oauth_kwargs():
     )
 
 
-def test_linkedin_social_login_never_creates_creator_profile():
-    """Login-only rule: NO login path may call the profile-creation helper."""
-    import asyncio
+async def test_linkedin_social_login_never_creates_creator_profile():
+    """Login-only rule: NO login path may call the profile-creation helper.
+
+    Native async test (pytest-asyncio, asyncio_mode=auto). Do NOT use
+    ``asyncio.run`` here: on Python 3.11 it leaves the thread with no current
+    event loop, which breaks every later async test in the session.
+    """
     from unittest.mock import MagicMock, patch
 
     from app.repository import user_repository as user_repo_module
@@ -419,7 +423,7 @@ def test_linkedin_social_login_never_creates_creator_profile():
         "save",
         side_effect=lambda _db, user: user,
     ):
-        result = asyncio.run(AuthService.login_with_oauth_profile(db=db, **kwargs))
+        result = await AuthService.login_with_oauth_profile(db=db, **kwargs)
 
     assert result.get("success") is True
     # The core assertion: login must NOT create/touch a creator profile.
@@ -427,9 +431,8 @@ def test_linkedin_social_login_never_creates_creator_profile():
     db.add.assert_not_called()
 
 
-def test_linkedin_social_login_existing_user_untouched():
+async def test_linkedin_social_login_existing_user_untouched():
     """An existing account signing in with LinkedIn gets no profile writes."""
-    import asyncio
     from unittest.mock import MagicMock, patch
 
     from app.repository import user_repository as user_repo_module
@@ -468,7 +471,7 @@ def test_linkedin_social_login_existing_user_untouched():
         "find_by_linked_in_id",
         return_value=None,
     ):
-        result = asyncio.run(AuthService.login_with_oauth_profile(db=db, **kwargs))
+        result = await AuthService.login_with_oauth_profile(db=db, **kwargs)
 
     assert result.get("success") is True
     ensure_profile.assert_not_called()

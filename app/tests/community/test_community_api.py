@@ -203,25 +203,30 @@ def test_create_my_profile_duplicate_returns_409():
 
     _login_as(user)
 
-    # Grandfathered user: the gate sees an existing (non-deleted) profile.
+    # Grandfathered user: the onboarding gate passes (existing profile), and the
+    # service then rejects the duplicate with 409.
     import app.service.deltapreneur.deltapreneur_onboarding_service as onboarding_svc
 
-    with patch.object(
-        onboarding_svc.DeltapreneurOnboardingService,
-        "is_user_eligible",
-        return_value=True,
-    ):
-        response = client.post(
-            "/api/v1/community/my",
-            json={
-                "name": "Chris Alexander",
-                "role": "EMPLOYEE",
-            },
-        )
+    try:
+        with patch.object(
+            onboarding_svc.DeltapreneurOnboardingService,
+            "ensure_onboarding_eligibility",
+        ), patch(
+            "app.service.community.community_service.CommunityRepository.find_any_by_app_user_id",
+            return_value=existing_profile,
+        ):
+            response = client.post(
+                "/api/v1/community/my",
+                json={
+                    "name": "Chris Alexander",
+                    "role": "EMPLOYEE",
+                },
+            )
 
-    assert response.status_code == 409
+        assert response.status_code == 409
 
-    _clear_login()
+    finally:
+        _clear_login()
 
 
 def test_get_my_profile_success():

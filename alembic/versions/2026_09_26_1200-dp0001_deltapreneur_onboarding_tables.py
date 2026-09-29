@@ -10,7 +10,7 @@ table is altered, and the downgrade drops only these 3 tables.
 
 from typing import Sequence, Union
 
-from alembic import op
+from alembic import context, op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -38,7 +38,20 @@ def _table_exists(bind, name: str) -> bool:
 def upgrade() -> None:
     bind = op.get_bind()
 
-    op.create_table(
+    def _create_if_missing(name: str, *columns) -> None:
+        """Create the table unless it already exists.
+
+        The app's startup (``Base.metadata.create_all`` in app.main lifespan) can
+        create these tables before this migration ever runs on a given database
+        (local dev / staging / Render). Skipping existing tables keeps
+        ``alembic upgrade head`` safe there instead of failing with DuplicateTable.
+        Never drops or alters an existing table.
+        """
+        if not context.is_offline_mode() and _table_exists(bind, name):
+            return
+        op.create_table(name, *columns)
+
+    _create_if_missing(
         "deltapreneur_applications",
         sa.Column("id", UUID(as_uuid=True), primary_key=True),
         sa.Column("full_name", sa.String(255), nullable=False),
@@ -72,7 +85,7 @@ def upgrade() -> None:
     # are already created by ``op.create_table`` under the standard
     # ``ix_<table>_<column>`` names — do NOT create them again here.
 
-    op.create_table(
+    _create_if_missing(
         "deltapreneur_invitations",
         sa.Column("id", UUID(as_uuid=True), primary_key=True),
         sa.Column(
@@ -104,7 +117,7 @@ def upgrade() -> None:
     # ix_deltapreneur_invitations_application_id are created by create_table
     # via ``index=True`` above — not repeated here.
 
-    op.create_table(
+    _create_if_missing(
         "deltapreneur_onboarding_state",
         sa.Column("id", UUID(as_uuid=True), primary_key=True),
         sa.Column(

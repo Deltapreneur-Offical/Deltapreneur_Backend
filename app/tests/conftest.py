@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
+import warnings
 from pathlib import Path
 import importlib
 import os
@@ -96,6 +98,38 @@ def _reset_rate_limiter():
     if callable(reset):
         reset()
     yield
+
+
+def _current_event_loop_or_none():
+    """The thread's current event loop, or None — never raises, never warns."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        try:
+            return asyncio.get_event_loop_policy().get_event_loop()
+        except RuntimeError:
+            return None
+
+
+@pytest.fixture(autouse=True)
+def _keep_event_loop_available():
+    """Keep a current event loop available to every later (async) test.
+
+    ``asyncio.run()`` — used by some sync tests and by sync service code paths —
+    ends with ``set_event_loop(None)``. pytest-asyncio's ``wrap_in_sync`` then
+    calls ``get_event_loop()`` for every following async test and fails with
+    ``RuntimeError: There is no current event loop in thread 'MainThread'``
+    (Python 3.11 / pytest-asyncio 0.26). If a test leaves the thread without a
+    current loop, put back the loop that was current before it (normally
+    pytest-asyncio's session loop). A no-op in every other case.
+    """
+    loop_before = _current_event_loop_or_none()
+    yield
+    if (
+        _current_event_loop_or_none() is None
+        and loop_before is not None
+        and not loop_before.is_closed()
+    ):
+        asyncio.set_event_loop(loop_before)
 
 
 @pytest.fixture
